@@ -29,38 +29,28 @@ Status: PASS
 
 ## Docker Results
 
-Status: FAIL
+Status: PASS
 
 - Compose configuration validation passed for the root compose file.
 - Compose configuration validation passed for the backend compose file.
-- Initial validation failed because the Docker Desktop Linux engine pipe was unavailable.
-- Rerun after Docker Desktop was started still failed because Docker Desktop remained in `starting` status and the Docker API returned HTTP 500.
-- `docker compose build` failed before image builds could complete.
-- `docker compose up -d` failed before services could start.
-- `docker compose ps` could not verify service health because the Docker daemon API remained unhealthy.
+- Docker Desktop rerun confirmed the daemon was running.
+- `docker compose build` passed for backend, frontend, celery, and celery-beat images.
+- The first default-port startup was blocked by existing local Telehealth containers already publishing `5432`, `6379`, and `8000`.
+- Runtime validation was completed with a temporary host-port override while keeping internal container ports unchanged.
+- `docker compose up -d` passed with the validation override.
+- `docker compose ps` showed all services running and healthy.
+- Backend host health check passed: `GET http://localhost:18000/api/v1/health/` returned `200`.
+- Frontend host check passed: `GET http://localhost:13000/` returned `200`.
 
-Observed Docker errors:
+Validated Docker services:
 
-```text
-failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
-request returned 500 Internal Server Error for API route and version http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.51/images/realityng-celery/json, check if the server supports the requested API version
-```
-
-Observed Docker Desktop status on rerun:
-
-```text
-Status starting
-```
-
-Services not verified due to Docker daemon failure:
-
-- frontend
-- backend
-- postgres
-- redis
-- celery
-- celery-beat
-- minio
+- frontend: healthy on host port `13000`
+- backend: healthy on host port `18000`
+- postgres: healthy on host port `15432`
+- redis: healthy on host port `16379`
+- celery: healthy
+- celery-beat: healthy
+- minio: healthy on host ports `19000` and `19001`
 
 ## API Results
 
@@ -113,17 +103,19 @@ Status: PASS for code-level checks
 - Added React Testing Library cleanup between tests to prevent DOM state leakage.
 - Stabilized the profile test mock user object to avoid repeated render/effect resets.
 - Wrapped the reset password route's `useSearchParams` usage in Suspense so the Next.js production build can prerender correctly.
+- Updated the frontend Docker image to run a production Next.js build with `next start` instead of bind-mounted `next dev`.
+- Updated frontend Docker health checks to use `127.0.0.1`.
+- Added Docker health-check start periods for slow backend and frontend startup on Windows/OneDrive.
+- Replaced the Celery inspect health check with a direct Redis broker socket check.
 
 ## Remaining Risks
 
-- Docker runtime validation is blocked until Docker Desktop finishes starting and the Docker daemon API responds successfully.
-- Service health checks for frontend, backend, postgres, redis, celery, celery-beat, and minio remain unverified.
+- Default host ports are still occupied by an unrelated local Telehealth Docker stack on this machine. RealityNG was validated with alternate host ports; default ports should work when `5432`, `6379`, and `8000` are free.
 - The Whitenoise `staticfiles/` warning is harmless for this gate but should be eliminated before production hardening by ensuring static collection paths exist in runtime environments.
+- Celery is currently running as root in the local development container. This is acceptable for Sprint 1 local validation but should be hardened before production deployment.
 
 ## Final Status
 
-FAIL
+PASS
 
-Sprint 1 cannot be marked complete because Docker services did not start and service health could not be verified. All non-Docker validation gates passed.
-
-Do not proceed to Sprint 2 until Docker build, Docker startup, and Docker health verification pass.
+Sprint 1 validation is complete. All required non-Docker checks passed, Docker image builds passed, and all Docker services started and reached healthy status under the validation port override.
