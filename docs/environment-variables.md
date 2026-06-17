@@ -26,6 +26,7 @@
 | `SENTRY_DSN` | empty locally | Enables Sentry when populated. |
 | `SENTRY_ENVIRONMENT` | `local` | Sentry environment tag. |
 | `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Sentry tracing sample rate. |
+| `LANDLORD_ROLE_AUTO_APPROVAL` | `true` | Controls whether landlord role requests are automatically approved for MVP. |
 
 ## Production Variables
 
@@ -45,4 +46,3 @@
 1. Never commit real `.env` files.
 2. Rotate `SECRET_KEY`, database credentials, MinIO/S3 credentials, and Sentry DSNs per environment.
 3. Production should use managed secret storage instead of plaintext environment files.
-

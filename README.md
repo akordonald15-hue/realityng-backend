@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the Sprint 0 backend foundation: Django project structure, settings split, DRF, DRF Spectacular, Celery, Redis, PostgreSQL, MinIO, health checks, structured logging, request correlation IDs, pytest, and CI.
+This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests.
 
 ## Repository Structure
 
@@ -109,9 +109,57 @@ DRF Spectacular exposes:
 1. Schema: http://localhost:8000/api/schema/
 2. Swagger UI: http://localhost:8000/api/docs/
 
+Sprint 1 endpoints are included under `/api/v1/auth/`, `/api/v1/users/`, `/api/v1/roles/`, and `/api/v1/admin/role-requests/`.
+
+## Authentication Flow
+
+1. A user registers through `POST /api/v1/auth/register/`.
+2. The backend creates a custom UUID user and `UserProfile`.
+3. The user signs in through `POST /api/v1/auth/login/`.
+4. The login response returns `access`, `refresh`, and the serialized user.
+5. Clients send `Authorization: Bearer <access>` on authenticated requests.
+6. Clients refresh sessions through `POST /api/v1/auth/token/refresh/`.
+7. Logout blacklists the refresh token through `POST /api/v1/auth/logout/`.
+
+Suspended users cannot log in and existing JWT access is denied by the custom JWT authentication class.
+
+Password reset endpoints are available as a foundation:
+
+1. `POST /api/v1/auth/forgot-password/`
+2. `POST /api/v1/auth/reset-password/`
+
+Email verification and phone verification fields exist on the user model; delivery workflows are intentionally left for a later sprint.
+
+## Role Approval Flow
+
+Seeded roles:
+
+1. `tenant`
+2. `buyer`
+3. `landlord`
+4. `agent`
+5. `artisan`
+6. `lawyer`
+7. `inspector`
+8. `admin`
+9. `super_admin`
+
+Flow:
+
+1. Authenticated users list roles through `GET /api/v1/roles/`.
+2. Users request roles through `POST /api/v1/roles/request/`.
+3. `tenant`, `buyer`, and MVP `landlord` requests are auto-approved.
+4. `agent`, `artisan`, `lawyer`, and `inspector` requests remain pending until admin approval.
+5. `admin` and `super_admin` cannot be self-assigned.
+6. Admins review pending requests through `GET /api/v1/admin/role-requests/`.
+7. Admins approve or reject through the role request decision endpoints.
+8. Role request and decision actions create audit logs.
+
+`LANDLORD_ROLE_AUTO_APPROVAL=true` controls landlord auto-approval and can be changed later without changing API contracts.
+
 ## Database Foundation
 
-Sprint 0 establishes:
+The foundation establishes:
 
 1. PostgreSQL connection configuration through `DATABASE_URL`.
 2. UUID primary key convention via `UUIDPrimaryKeyMixin`.
@@ -119,7 +167,7 @@ Sprint 0 establishes:
 4. `SoftDeleteMixin` with `deleted_at`, soft-delete queryset behavior, and hard-delete escape hatch.
 5. Initial migrations strategy: Django built-in apps and third-party migrations only until Sprint 1 introduces domain models.
 
-RealityNG domain entities are intentionally not implemented in Sprint 0.
+Sprint 1 adds only authentication, role, profile, and role-audit entities. Property marketplace entities remain out of scope until Sprint 2.
 
 ## Monitoring and Logging
 
@@ -169,10 +217,19 @@ Celery cannot connect:
 
 ## Manual Steps Before Sprint 1
 
-1. Decide whether to keep Django's default `User` model or introduce a custom user model before the first production auth migration.
+## Manual Steps Before Sprint 2
+
+1. Apply migrations after pulling Sprint 1:
+
+```powershell
+python manage.py migrate
+```
+
 2. Create a superuser when needed:
 
 ```powershell
 docker compose exec backend python manage.py createsuperuser
 ```
+
+3. Confirm `LANDLORD_ROLE_AUTO_APPROVAL` is correct for the target environment.
 

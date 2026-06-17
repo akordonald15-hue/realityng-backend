@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging.config
-import os
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -29,7 +29,7 @@ env_file = BASE_DIR / ".env"
 if env_file.exists():
     environ.Env.read_env(env_file)
 
-SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development")
+SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development-secret-key")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 ROOT_URLCONF = "config.urls"
@@ -53,11 +53,13 @@ THIRD_PARTY_APPS = [
     "django_filters",
     "drf_spectacular",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
 ]
 
 LOCAL_APPS = [
     "apps.common",
     "apps.core",
+    "apps.accounts",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -88,8 +90,8 @@ CACHES = {
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.accounts.authentication.ActiveUserJWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -101,11 +103,29 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 20,
 }
 
+AUTH_USER_MODEL = "accounts.User"
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": False,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+LANDLORD_ROLE_AUTO_APPROVAL = env.bool("LANDLORD_ROLE_AUTO_APPROVAL", default=True)
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "RealityNG API",
     "DESCRIPTION": "API for RealityNG, a diaspora-focused Nigerian PropTech platform.",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "ENUM_NAME_OVERRIDES": {
+        "RoleEnum": "apps.accounts.choices.RoleName",
+    },
 }
 
 LANGUAGE_CODE = "en-us"
@@ -179,4 +199,3 @@ if SENTRY_DSN:
 
 LOGGING_CONFIG = None
 logging.config.dictConfig(LOGGING)
-

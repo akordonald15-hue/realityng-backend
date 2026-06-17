@@ -12,6 +12,8 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+*.sqlite3
+schema.yml
 
 # Django runtime output
 media/
@@ -20,4 +22,3 @@ staticfiles/
 # Local tooling
 .DS_Store
 Thumbs.db
-

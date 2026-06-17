@@ -73,6 +73,7 @@ services:
       MINIO_BUCKET_NAME: realityng-local
       SENTRY_DSN: ""
       SENTRY_ENVIRONMENT: local
+      LANDLORD_ROLE_AUTO_APPROVAL: "true"
     ports:
       - "8000:8000"
     volumes:
@@ -154,4 +155,3 @@ volumes:
 networks:
   realityng-backend:
     driver: bridge
-

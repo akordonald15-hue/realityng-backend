@@ -24,10 +24,10 @@ class TimestampMixin(models.Model):
 
 
 class SoftDeleteQuerySet(models.QuerySet):
-    def alive(self) -> "SoftDeleteQuerySet":
+    def alive(self) -> SoftDeleteQuerySet:
         return self.filter(deleted_at__isnull=True)
 
-    def deleted(self) -> "SoftDeleteQuerySet":
+    def deleted(self) -> SoftDeleteQuerySet:
         return self.filter(deleted_at__isnull=False)
 
     def delete(self) -> tuple[int, dict[str, int]]:
@@ -52,12 +52,23 @@ class SoftDeleteMixin(models.Model):
     class Meta:
         abstract = True
 
-    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
+    def delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
         self.deleted_at = timezone.now()
-        self.save(update_fields=["deleted_at", "updated_at"] if hasattr(self, "updated_at") else ["deleted_at"])
+        update_fields = (
+            ["deleted_at", "updated_at"] if hasattr(self, "updated_at") else ["deleted_at"]
+        )
+        self.save(update_fields=update_fields)
         return 1, {self._meta.label: 1}
 
-    def hard_delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
+    def hard_delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
         return super().delete(using=using, keep_parents=keep_parents)
 
 
@@ -66,4 +77,3 @@ class BaseModel(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     class Meta:
         abstract = True
-
