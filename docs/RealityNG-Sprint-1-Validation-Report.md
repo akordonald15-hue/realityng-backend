@@ -33,14 +33,23 @@ Status: FAIL
 
 - Compose configuration validation passed for the root compose file.
 - Compose configuration validation passed for the backend compose file.
-- `docker compose build` failed because the Docker Desktop Linux engine was unavailable.
-- `docker compose up -d` failed for the same Docker daemon connectivity issue.
-- `docker compose ps` could not verify service health because Docker could not connect to `npipe:////./pipe/dockerDesktopLinuxEngine`.
+- Initial validation failed because the Docker Desktop Linux engine pipe was unavailable.
+- Rerun after Docker Desktop was started still failed because Docker Desktop remained in `starting` status and the Docker API returned HTTP 500.
+- `docker compose build` failed before image builds could complete.
+- `docker compose up -d` failed before services could start.
+- `docker compose ps` could not verify service health because the Docker daemon API remained unhealthy.
 
-Observed Docker error:
+Observed Docker errors:
 
 ```text
 failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
+request returned 500 Internal Server Error for API route and version http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.51/images/realityng-celery/json, check if the server supports the requested API version
+```
+
+Observed Docker Desktop status on rerun:
+
+```text
+Status starting
 ```
 
 Services not verified due to Docker daemon failure:
@@ -107,7 +116,7 @@ Status: PASS for code-level checks
 
 ## Remaining Risks
 
-- Docker runtime validation is blocked until Docker Desktop or another Docker engine is running.
+- Docker runtime validation is blocked until Docker Desktop finishes starting and the Docker daemon API responds successfully.
 - Service health checks for frontend, backend, postgres, redis, celery, celery-beat, and minio remain unverified.
 - The Whitenoise `staticfiles/` warning is harmless for this gate but should be eliminated before production hardening by ensuring static collection paths exist in runtime environments.
 
