@@ -140,6 +140,13 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+USE_S3_MEDIA_STORAGE = env.bool("USE_S3_MEDIA_STORAGE", default=False)
+PROPERTY_IMAGE_MAX_COUNT = env.int("PROPERTY_IMAGE_MAX_COUNT", default=30)
+PROPERTY_IMAGE_MAX_SIZE_MB = env.int("PROPERTY_IMAGE_MAX_SIZE_MB", default=10)
+PROPERTY_IMAGE_ALLOWED_TYPES = env.list(
+    "PROPERTY_IMAGE_ALLOWED_TYPES",
+    default=["image/jpeg", "image/png", "image/webp"],
+)
 
 TEMPLATES = [
     {
@@ -184,9 +191,29 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", default="http://minio:9000")
+MINIO_PUBLIC_ENDPOINT = env("MINIO_PUBLIC_ENDPOINT", default=MINIO_ENDPOINT)
 MINIO_ACCESS_KEY = env("MINIO_ACCESS_KEY", default="minioadmin")
 MINIO_SECRET_KEY = env("MINIO_SECRET_KEY", default="minioadmin")
 MINIO_BUCKET_NAME = env("MINIO_BUCKET_NAME", default="realityng-local")
+
+if USE_S3_MEDIA_STORAGE:
+    AWS_ACCESS_KEY_ID = MINIO_ACCESS_KEY
+    AWS_SECRET_ACCESS_KEY = MINIO_SECRET_KEY
+    AWS_STORAGE_BUCKET_NAME = MINIO_BUCKET_NAME
+    AWS_S3_ENDPOINT_URL = MINIO_ENDPOINT
+    AWS_S3_REGION_NAME = env("MINIO_REGION_NAME", default="us-east-1")
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = env.bool("MINIO_QUERYSTRING_AUTH", default=False)
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
 
 SENTRY_DSN = env("SENTRY_DSN")
 if SENTRY_DSN:

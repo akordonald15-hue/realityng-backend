@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.properties.choices import PropertyStatus, PropertyType
-from apps.properties.models import Property
+from apps.properties.models import Property, PropertyImage
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -25,9 +26,101 @@ PROPERTY_MUTABLE_FIELDS = [
 ]
 
 
+def build_media_url(file_field, request=None) -> str:
+    if not file_field:
+        return ""
+    url = file_field.url
+    internal_endpoint = getattr(settings, "MINIO_ENDPOINT", "").rstrip("/")
+    public_endpoint = getattr(settings, "MINIO_PUBLIC_ENDPOINT", internal_endpoint).rstrip("/")
+    if internal_endpoint and public_endpoint and url.startswith(internal_endpoint):
+        url = f"{public_endpoint}{url[len(internal_endpoint):]}"
+    if request and url.startswith("/"):
+        return request.build_absolute_uri(url)
+    return url
+
+
+class PropertyImageSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    image = serializers.ImageField(write_only=True, required=True)
+
+    class Meta:
+        model = PropertyImage
+        fields = [
+            "id",
+            "image",
+            "image_url",
+            "caption",
+            "display_order",
+            "is_cover",
+            "created_at",
+        ]
+        read_only_fields = ["id", "image_url", "created_at"]
+
+    def get_image_url(self, obj: PropertyImage) -> str:
+        return build_media_url(obj.image, self.context.get("request"))
+
+    def validate_image(self, value):
+        allowed_types = set(settings.PROPERTY_IMAGE_ALLOWED_TYPES)
+        content_type = getattr(value, "content_type", "")
+        if content_type not in allowed_types:
+            allowed = ", ".join(sorted(allowed_types))
+            raise serializers.ValidationError(f"Image must be one of: {allowed}.")
+
+        max_size = settings.PROPERTY_IMAGE_MAX_SIZE_MB * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                f"Image must be {settings.PROPERTY_IMAGE_MAX_SIZE_MB}MB or smaller."
+            )
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        prop = self.context.get("property")
+        if self.instance is None and prop:
+            image_count = prop.images.count()
+            if image_count >= settings.PROPERTY_IMAGE_MAX_COUNT:
+                raise serializers.ValidationError(
+                    {
+                        "image": (
+                            f"A property can have at most "
+                            f"{settings.PROPERTY_IMAGE_MAX_COUNT} images."
+                        )
+                    }
+                )
+        return attrs
+
+    def create(self, validated_data: dict) -> PropertyImage:
+        prop = self.context["property"]
+        if not prop.images.exists():
+            validated_data["is_cover"] = True
+        return PropertyImage.objects.create(property=prop, **validated_data)
+
+
+class PropertyImageMetadataSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PropertyImage
+        fields = ["id", "image_url", "caption", "display_order", "is_cover", "created_at"]
+        read_only_fields = ["id", "image_url", "created_at"]
+
+    def get_image_url(self, obj: PropertyImage) -> str:
+        return build_media_url(obj.image, self.context.get("request"))
+
+    def update(self, instance: PropertyImage, validated_data: dict) -> PropertyImage:
+        instance.caption = validated_data.get("caption", instance.caption)
+        instance.display_order = validated_data.get("display_order", instance.display_order)
+        if "is_cover" in validated_data:
+            instance.is_cover = validated_data["is_cover"]
+        instance.save()
+        return instance
+
+
 class PropertySerializer(serializers.ModelSerializer):
     owner_id = serializers.UUIDField(source="owner.id", read_only=True)
     owner_email = serializers.EmailField(source="owner.email", read_only=True)
+    cover_image_url = serializers.SerializerMethodField()
+    image_count = serializers.SerializerMethodField()
+    image_gallery = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -53,6 +146,9 @@ class PropertySerializer(serializers.ModelSerializer):
             "featured",
             "owner_id",
             "owner_email",
+            "cover_image_url",
+            "image_count",
+            "image_gallery",
             "created_at",
             "updated_at",
         ]
@@ -62,9 +158,28 @@ class PropertySerializer(serializers.ModelSerializer):
             "status",
             "owner_id",
             "owner_email",
+            "cover_image_url",
+            "image_count",
+            "image_gallery",
             "created_at",
             "updated_at",
         ]
+
+    def get_cover_image_url(self, obj: Property) -> str:
+        cover = next((image for image in obj.images.all() if image.is_cover), None)
+        return build_media_url(cover.image, self.context.get("request")) if cover else ""
+
+    def get_image_count(self, obj: Property) -> int:
+        if hasattr(obj, "image_count_value"):
+            return obj.image_count_value
+        return obj.images.count()
+
+    def get_image_gallery(self, obj: Property) -> list[dict]:
+        return PropertyImageMetadataSerializer(
+            obj.images.all(),
+            many=True,
+            context=self.context,
+        ).data
 
     def validate_price(self, value):
         if value <= 0:
@@ -120,6 +235,10 @@ class PropertySerializer(serializers.ModelSerializer):
 
 
 class PublicPropertySerializer(serializers.ModelSerializer):
+    cover_image_url = serializers.SerializerMethodField()
+    image_count = serializers.SerializerMethodField()
+    image_gallery = serializers.SerializerMethodField()
+
     class Meta:
         model = Property
         fields = [
@@ -141,8 +260,27 @@ class PublicPropertySerializer(serializers.ModelSerializer):
             "land_size",
             "floor_area",
             "featured",
+            "cover_image_url",
+            "image_count",
+            "image_gallery",
             "created_at",
         ]
+
+    def get_cover_image_url(self, obj: Property) -> str:
+        cover = next((image for image in obj.images.all() if image.is_cover), None)
+        return build_media_url(cover.image, self.context.get("request")) if cover else ""
+
+    def get_image_count(self, obj: Property) -> int:
+        if hasattr(obj, "image_count_value"):
+            return obj.image_count_value
+        return obj.images.count()
+
+    def get_image_gallery(self, obj: Property) -> list[dict]:
+        return PropertyImageMetadataSerializer(
+            obj.images.all(),
+            many=True,
+            context=self.context,
+        ).data
 
 
 class PropertyReviewDecisionSerializer(serializers.Serializer):

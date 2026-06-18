@@ -3,11 +3,15 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils.text import slugify
 
-from apps.common.models import BaseModel
+from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
 from apps.properties.choices import ListingType, PropertyStatus, PropertyType
+
+
+def property_image_upload_to(instance: PropertyImage, filename: str) -> str:
+    return f"properties/{instance.property_id}/images/{filename}"
 
 
 class Property(BaseModel):
@@ -91,3 +95,45 @@ class Property(BaseModel):
     @property
     def price_as_decimal(self) -> Decimal:
         return Decimal(self.price)
+
+
+class PropertyImage(UUIDPrimaryKeyMixin):
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.CASCADE,
+        related_name="images",
+    )
+    image = models.ImageField(upload_to=property_image_upload_to)
+    caption = models.CharField(max_length=180, blank=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    is_cover = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["display_order", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["property"],
+                condition=models.Q(is_cover=True),
+                name="unique_cover_image_per_property",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["property", "display_order"]),
+            models.Index(fields=["property", "is_cover"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.property.title} image"
+
+    def save(self, *args, **kwargs) -> None:
+        with transaction.atomic():
+            if self.is_cover:
+                PropertyImage.objects.filter(property_id=self.property_id).exclude(pk=self.pk).update(
+                    is_cover=False
+                )
+            super().save(*args, **kwargs)
+
+    def set_as_cover(self) -> None:
+        self.is_cover = True
+        self.save(update_fields=["is_cover"])

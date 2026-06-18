@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from drf_spectacular.utils import OpenApiResponse, extend_schema
-from rest_framework import viewsets
+from django.db.models import Count
+from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
@@ -10,9 +14,11 @@ from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
 from apps.properties.choices import PropertyStatus
 from apps.properties.filters import PublicPropertyFilter
-from apps.properties.models import Property
+from apps.properties.models import Property, PropertyImage
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
+    PropertyImageMetadataSerializer,
+    PropertyImageSerializer,
     PropertyReviewDecisionSerializer,
     PropertySerializer,
     PublicPropertySerializer,
@@ -30,7 +36,7 @@ class PropertyViewSet(viewsets.ModelViewSet):
     filterset_fields = ["status", "property_type", "listing_type", "city"]
 
     def get_queryset(self):
-        queryset = Property.objects.select_related("owner")
+        queryset = Property.objects.select_related("owner").prefetch_related("images")
         if user_is_admin(self.request.user):
             return queryset
         return queryset.filter(owner=self.request.user)
@@ -55,6 +61,108 @@ class PropertyViewSet(viewsets.ModelViewSet):
             metadata={"status": prop.status},
         )
         return Response(PropertySerializer(prop, context={"request": request}).data)
+
+    @extend_schema(
+        request=PropertyImageSerializer,
+        responses={200: PropertyImageMetadataSerializer(many=True), 201: PropertyImageSerializer},
+    )
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="images",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def images(self, request, slug=None):
+        prop = self.get_object()
+        if request.method == "GET":
+            serializer = PropertyImageMetadataSerializer(
+                prop.images.all(),
+                many=True,
+                context={"request": request},
+            )
+            return Response(serializer.data)
+
+        serializer = PropertyImageSerializer(
+            data=request.data,
+            context={"request": request, "property": prop},
+        )
+        serializer.is_valid(raise_exception=True)
+        image = serializer.save()
+        create_audit_log(
+            actor=request.user,
+            action="property.image_uploaded",
+            entity=prop,
+            metadata={"image_id": str(image.id), "is_cover": image.is_cover},
+        )
+        return Response(
+            PropertyImageSerializer(image, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        request=PropertyImageMetadataSerializer,
+        parameters=[
+            OpenApiParameter("image_id", OpenApiTypes.UUID, OpenApiParameter.PATH),
+        ],
+        responses={200: PropertyImageMetadataSerializer, 204: None},
+    )
+    @action(detail=True, methods=["patch", "delete"], url_path=r"images/(?P<image_id>[^/.]+)")
+    def image_detail(self, request, slug=None, image_id=None):
+        prop = self.get_object()
+        image = self._get_property_image(prop, image_id)
+        if request.method == "DELETE":
+            image_file = image.image
+            image.delete()
+            image_file.delete(save=False)
+            create_audit_log(
+                actor=request.user,
+                action="property.image_deleted",
+                entity=prop,
+                metadata={"image_id": str(image_id)},
+            )
+            if not prop.images.filter(is_cover=True).exists():
+                replacement = prop.images.order_by("display_order", "created_at").first()
+                if replacement:
+                    replacement.set_as_cover()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        serializer = PropertyImageMetadataSerializer(
+            image,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        create_audit_log(
+            actor=request.user,
+            action="property.image_updated",
+            entity=prop,
+            metadata={"image_id": str(image.id)},
+        )
+        return Response(serializer.data)
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("image_id", OpenApiTypes.UUID, OpenApiParameter.PATH),
+        ],
+        responses={200: PropertyImageMetadataSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path=r"images/(?P<image_id>[^/.]+)/set-cover")
+    def set_cover_image(self, request, slug=None, image_id=None):
+        prop = self.get_object()
+        image = self._get_property_image(prop, image_id)
+        image.set_as_cover()
+        create_audit_log(
+            actor=request.user,
+            action="property.image_cover_set",
+            entity=prop,
+            metadata={"image_id": str(image.id)},
+        )
+        return Response(PropertyImageMetadataSerializer(image, context={"request": request}).data)
+
+    def _get_property_image(self, prop: Property, image_id: str | None) -> PropertyImage:
+        return get_object_or_404(prop.images.all(), id=image_id)
 
     @extend_schema(
         request=PropertyReviewDecisionSerializer,
@@ -113,7 +221,12 @@ class PublicPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ["-featured", "-created_at"]
 
     def get_queryset(self):
-        return Property.objects.filter(status=PropertyStatus.APPROVED).select_related("owner")
+        return (
+            Property.objects.filter(status=PropertyStatus.APPROVED)
+            .select_related("owner")
+            .annotate(image_count_value=Count("images"))
+            .prefetch_related("images")
+        )
 
     @extend_schema(
         responses={

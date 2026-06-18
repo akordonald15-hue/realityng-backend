@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests. Sprint 2 adds property listing CRUD, review workflow, and public approved-listing browsing APIs.
+This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests. Sprint 2 adds property listing CRUD, review workflow, and public approved-listing browsing APIs. Sprint 3 adds property image upload and gallery management.
 
 ## Repository Structure
 
@@ -10,7 +10,7 @@ This repository contains the backend foundation for RealityNG. Sprint 1 adds aut
 .
 |-- apps/
 |   |-- common/          # Shared abstract model primitives
-|   |-- properties/      # Property listings, review workflow, public browse API
+|   |-- properties/      # Property listings, review workflow, media, public browse API
 |   `-- core/            # Health endpoint, request IDs, logging
 |-- config/
 |   |-- settings/        # base.py, local.py, production.py
@@ -114,6 +114,8 @@ Sprint 1 endpoints are included under `/api/v1/auth/`, `/api/v1/users/`, `/api/v
 
 Sprint 2 property endpoints are included under `/api/v1/properties/` and `/api/v1/public/properties/`.
 
+Sprint 3 property image endpoints are nested under `/api/v1/properties/{slug}/images/`.
+
 ## Authentication Flow
 
 1. A user registers through `POST /api/v1/auth/register/`.
@@ -189,6 +191,28 @@ Public browsing returns approved listings only and supports:
 
 Listings are soft-deleted through the shared `SoftDeleteMixin`. Updating an approved listing moves it back to `draft` so it can be reviewed again.
 
+## Property Media Flow
+
+Owner/admin image endpoints:
+
+1. `GET /api/v1/properties/{slug}/images/`
+2. `POST /api/v1/properties/{slug}/images/`
+3. `PATCH /api/v1/properties/{slug}/images/{image_id}/`
+4. `DELETE /api/v1/properties/{slug}/images/{image_id}/`
+5. `POST /api/v1/properties/{slug}/images/{image_id}/set-cover/`
+
+Rules:
+
+1. Owners can manage images for their own properties.
+2. Admin users can manage images for any property.
+3. Non-owners cannot manage property images.
+4. A property can have up to `PROPERTY_IMAGE_MAX_COUNT` images.
+5. Accepted MIME types are configured through `PROPERTY_IMAGE_ALLOWED_TYPES`.
+6. Maximum file size is configured through `PROPERTY_IMAGE_MAX_SIZE_MB`.
+7. Only one image can be cover at a time.
+
+Docker local development uses MinIO when `USE_S3_MEDIA_STORAGE=true`; non-Docker local tests default to Django filesystem media storage. Public property responses include `cover_image_url`, `image_count`, and `image_gallery`.
+
 ## Database Foundation
 
 The foundation establishes:
@@ -199,7 +223,7 @@ The foundation establishes:
 4. `SoftDeleteMixin` with `deleted_at`, soft-delete queryset behavior, and hard-delete escape hatch.
 5. Initial migrations strategy: Django built-in apps and third-party migrations only until Sprint 1 introduces domain models.
 
-Sprint 1 adds authentication, role, profile, and role-audit entities. Sprint 2 adds the `Property` entity with indexes for status, location, type/listing filters, price, owner/status, and slug lookup.
+Sprint 1 adds authentication, role, profile, and role-audit entities. Sprint 2 adds the `Property` entity with indexes for status, location, type/listing filters, price, owner/status, and slug lookup. Sprint 3 adds `PropertyImage` with property/order and cover-image indexes plus a conditional unique constraint for one cover image per property.
 
 ## Monitoring and Logging
 
@@ -249,9 +273,9 @@ Celery cannot connect:
 
 ## Manual Steps Before Sprint 1
 
-## Manual Steps Before Sprint 3
+## Manual Steps Before Sprint 4
 
-1. Apply migrations after pulling Sprint 2:
+1. Apply migrations after pulling Sprint 3:
 
 ```powershell
 python manage.py migrate
@@ -265,3 +289,4 @@ docker compose exec backend python manage.py createsuperuser
 
 3. Confirm default Docker host ports are free, or use alternate published ports when another stack is running locally.
 4. Confirm `LANDLORD_ROLE_AUTO_APPROVAL` is correct for the target environment.
+5. Confirm `MINIO_PUBLIC_ENDPOINT` matches the browser-accessible object storage URL for the target environment.

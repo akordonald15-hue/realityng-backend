@@ -1,6 +1,9 @@
 from decimal import Decimal
+from io import BytesIO
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+from PIL import Image
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
@@ -79,3 +82,14 @@ def property_listing(user):
         floor_area=Decimal("340.00"),
         status=PropertyStatus.APPROVED,
     )
+
+
+@pytest.fixture
+def test_image_file():
+    def _make_image(name="property.jpg", image_format="JPEG", content_type="image/jpeg"):
+        image = Image.new("RGB", (16, 16), color=(32, 96, 160))
+        buffer = BytesIO()
+        image.save(buffer, format=image_format)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type=content_type)
+
+    return _make_image

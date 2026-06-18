@@ -15,9 +15,11 @@
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery broker URL. |
 | `CELERY_RESULT_BACKEND` | `redis://redis:6379/0` | Celery result backend URL. |
 | `MINIO_ENDPOINT` | `http://minio:9000` | S3-compatible local object storage endpoint. |
+| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Browser-accessible object storage endpoint used when generating media URLs. |
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key. |
 | `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key. |
 | `MINIO_BUCKET_NAME` | `realityng-local` | Local object storage bucket name. |
+| `USE_S3_MEDIA_STORAGE` | `true` | Enables S3-compatible media storage. Docker local development sets this to `true`; direct local tests can leave it `false`. |
 
 ## Optional Variables
 
@@ -27,6 +29,9 @@
 | `SENTRY_ENVIRONMENT` | `local` | Sentry environment tag. |
 | `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Sentry tracing sample rate. |
 | `LANDLORD_ROLE_AUTO_APPROVAL` | `true` | Controls whether landlord role requests are automatically approved for MVP. |
+| `PROPERTY_IMAGE_MAX_COUNT` | `30` | Maximum number of uploaded images per property. |
+| `PROPERTY_IMAGE_MAX_SIZE_MB` | `10` | Maximum uploaded image size in megabytes. |
+| `PROPERTY_IMAGE_ALLOWED_TYPES` | `image/jpeg,image/png,image/webp` | Comma-separated allowed image MIME types. |
 
 ## Production Variables
 
