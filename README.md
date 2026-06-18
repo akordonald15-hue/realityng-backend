@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests.
+This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests. Sprint 2 adds property listing CRUD, review workflow, and public approved-listing browsing APIs.
 
 ## Repository Structure
 
@@ -10,6 +10,7 @@ This repository contains the backend foundation for RealityNG. Sprint 1 adds aut
 .
 |-- apps/
 |   |-- common/          # Shared abstract model primitives
+|   |-- properties/      # Property listings, review workflow, public browse API
 |   `-- core/            # Health endpoint, request IDs, logging
 |-- config/
 |   |-- settings/        # base.py, local.py, production.py
@@ -111,6 +112,8 @@ DRF Spectacular exposes:
 
 Sprint 1 endpoints are included under `/api/v1/auth/`, `/api/v1/users/`, `/api/v1/roles/`, and `/api/v1/admin/role-requests/`.
 
+Sprint 2 property endpoints are included under `/api/v1/properties/` and `/api/v1/public/properties/`.
+
 ## Authentication Flow
 
 1. A user registers through `POST /api/v1/auth/register/`.
@@ -157,6 +160,35 @@ Flow:
 
 `LANDLORD_ROLE_AUTO_APPROVAL=true` controls landlord auto-approval and can be changed later without changing API contracts.
 
+## Property Listing Flow
+
+Authenticated users can create draft listings through `POST /api/v1/properties/`.
+
+Owner/admin management endpoints:
+
+1. `GET /api/v1/properties/`
+2. `POST /api/v1/properties/`
+3. `GET /api/v1/properties/{slug}/`
+4. `PATCH /api/v1/properties/{slug}/`
+5. `DELETE /api/v1/properties/{slug}/`
+6. `POST /api/v1/properties/{slug}/submit-for-review/`
+7. `POST /api/v1/properties/{slug}/approve/`
+8. `POST /api/v1/properties/{slug}/reject/`
+
+Public browsing endpoints:
+
+1. `GET /api/v1/public/properties/`
+2. `GET /api/v1/public/properties/{slug}/`
+
+Public browsing returns approved listings only and supports:
+
+1. Pagination
+2. Ordering by `created_at`, `price`, `title`, and `featured`
+3. Search by title through `search`
+4. Filters for `city`, `property_type`, `listing_type`, `min_price`, and `max_price`
+
+Listings are soft-deleted through the shared `SoftDeleteMixin`. Updating an approved listing moves it back to `draft` so it can be reviewed again.
+
 ## Database Foundation
 
 The foundation establishes:
@@ -167,7 +199,7 @@ The foundation establishes:
 4. `SoftDeleteMixin` with `deleted_at`, soft-delete queryset behavior, and hard-delete escape hatch.
 5. Initial migrations strategy: Django built-in apps and third-party migrations only until Sprint 1 introduces domain models.
 
-Sprint 1 adds only authentication, role, profile, and role-audit entities. Property marketplace entities remain out of scope until Sprint 2.
+Sprint 1 adds authentication, role, profile, and role-audit entities. Sprint 2 adds the `Property` entity with indexes for status, location, type/listing filters, price, owner/status, and slug lookup.
 
 ## Monitoring and Logging
 
@@ -217,9 +249,9 @@ Celery cannot connect:
 
 ## Manual Steps Before Sprint 1
 
-## Manual Steps Before Sprint 2
+## Manual Steps Before Sprint 3
 
-1. Apply migrations after pulling Sprint 1:
+1. Apply migrations after pulling Sprint 2:
 
 ```powershell
 python manage.py migrate
@@ -231,5 +263,5 @@ python manage.py migrate
 docker compose exec backend python manage.py createsuperuser
 ```
 
-3. Confirm `LANDLORD_ROLE_AUTO_APPROVAL` is correct for the target environment.
-
+3. Confirm default Docker host ports are free, or use alternate published ports when another stack is running locally.
+4. Confirm `LANDLORD_ROLE_AUTO_APPROVAL` is correct for the target environment.
