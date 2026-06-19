@@ -4,7 +4,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from apps.properties.choices import PropertyStatus, PropertyType
-from apps.properties.models import Property, PropertyImage
+from apps.properties.models import Favorite, Property, PropertyImage
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -238,6 +238,7 @@ class PublicPropertySerializer(serializers.ModelSerializer):
     cover_image_url = serializers.SerializerMethodField()
     image_count = serializers.SerializerMethodField()
     image_gallery = serializers.SerializerMethodField()
+    is_favorited = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -263,6 +264,7 @@ class PublicPropertySerializer(serializers.ModelSerializer):
             "cover_image_url",
             "image_count",
             "image_gallery",
+            "is_favorited",
             "created_at",
         ]
 
@@ -281,6 +283,63 @@ class PublicPropertySerializer(serializers.ModelSerializer):
             many=True,
             context=self.context,
         ).data
+
+    def get_is_favorited(self, obj: Property) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+
+        favorite_property_ids = self.context.get("favorite_property_ids")
+        if favorite_property_ids is not None:
+            return obj.id in favorite_property_ids
+
+        return Favorite.objects.filter(user=user, property=obj).exists()
+
+
+class FavoriteSerializer(serializers.ModelSerializer):
+    property_id = serializers.UUIDField(write_only=True)
+    property = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Favorite
+        fields = ["id", "property_id", "property", "created_at"]
+        read_only_fields = ["id", "property", "created_at"]
+
+    def get_property(self, obj: Favorite) -> dict:
+        return PublicPropertySerializer(
+            obj.property,
+            context={
+                **self.context,
+                "favorite_property_ids": {obj.property_id},
+            },
+        ).data
+
+    def validate_property_id(self, value):
+        try:
+            prop = Property.objects.get(id=value)
+        except Property.DoesNotExist as exc:
+            raise serializers.ValidationError("Property is not available.") from exc
+
+        request = self.context["request"]
+        if Favorite.objects.filter(user=request.user, property=prop).exists():
+            raise serializers.ValidationError("Property is already saved.")
+
+        self.context["property"] = prop
+        return value
+
+    def create(self, validated_data: dict) -> Favorite:
+        validated_data.pop("property_id")
+        return Favorite.objects.create(
+            user=self.context["request"].user,
+            property=self.context["property"],
+        )
+
+
+class DashboardSummarySerializer(serializers.Serializer):
+    saved_properties_count = serializers.IntegerField()
+    active_listings_count = serializers.IntegerField()
+    draft_listings_count = serializers.IntegerField()
 
 
 class PropertyReviewDecisionSerializer(serializers.Serializer):

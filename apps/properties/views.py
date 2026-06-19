@@ -4,19 +4,22 @@ from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
 from apps.properties.choices import PropertyStatus
 from apps.properties.filters import PublicPropertyFilter
-from apps.properties.models import Property, PropertyImage
+from apps.properties.models import Favorite, Property, PropertyImage
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
+    DashboardSummarySerializer,
+    FavoriteSerializer,
     PropertyImageMetadataSerializer,
     PropertyImageSerializer,
     PropertyReviewDecisionSerializer,
@@ -228,6 +231,18 @@ class PublicPropertyViewSet(viewsets.ReadOnlyModelViewSet):
             .prefetch_related("images")
         )
 
+    def get_serializer_context(self) -> dict:
+        context = super().get_serializer_context()
+        user = self.request.user
+        if user.is_authenticated:
+            context["favorite_property_ids"] = set(
+                Favorite.objects.filter(
+                    user=user,
+                    property__deleted_at__isnull=True,
+                ).values_list("property_id", flat=True)
+            )
+        return context
+
     @extend_schema(
         responses={
             200: PublicPropertySerializer,
@@ -236,3 +251,90 @@ class PublicPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+
+class FavoriteViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Favorite.objects.none()
+    serializer_class = FavoriteSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = "property_id"
+    lookup_url_kwarg = "property_id"
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Favorite.objects.none()
+        return (
+            Favorite.objects.filter(
+                user=self.request.user,
+                property__deleted_at__isnull=True,
+            )
+            .select_related("property", "property__owner")
+            .prefetch_related("property__images")
+        )
+
+    @extend_schema(
+        request=FavoriteSerializer,
+        responses={201: FavoriteSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        favorite = serializer.save()
+        create_audit_log(
+            actor=request.user,
+            action="property_favorited",
+            entity=favorite.property,
+            metadata={"favorite_id": str(favorite.id)},
+        )
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            FavoriteSerializer(favorite, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("property_id", OpenApiTypes.UUID, OpenApiParameter.PATH),
+        ],
+        responses={204: None},
+    )
+    def destroy(self, request, *args, **kwargs):
+        favorite = self.get_object()
+        prop = favorite.property
+        favorite_id = favorite.id
+        favorite.delete()
+        create_audit_log(
+            actor=request.user,
+            action="property_unfavorited",
+            entity=prop,
+            metadata={"favorite_id": str(favorite_id)},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class DashboardSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: DashboardSummarySerializer})
+    def get(self, request):
+        data = {
+            "saved_properties_count": Favorite.objects.filter(
+                user=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "active_listings_count": Property.objects.filter(
+                owner=request.user,
+                status=PropertyStatus.APPROVED,
+            ).count(),
+            "draft_listings_count": Property.objects.filter(
+                owner=request.user,
+                status=PropertyStatus.DRAFT,
+            ).count(),
+        }
+        return Response(DashboardSummarySerializer(data).data)

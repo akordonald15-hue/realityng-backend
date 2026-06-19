@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.properties.models import Property, PropertyImage
+from apps.properties.models import Favorite, Property, PropertyImage
 
 
 class PropertyImageInline(admin.TabularInline):
@@ -35,4 +35,12 @@ class PropertyImageAdmin(admin.ModelAdmin):
     list_display = ["property", "caption", "display_order", "is_cover", "created_at"]
     list_filter = ["is_cover", "created_at"]
     search_fields = ["property__title", "caption"]
+    readonly_fields = ["created_at"]
+
+
+@admin.register(Favorite)
+class FavoriteAdmin(admin.ModelAdmin):
+    list_display = ["user", "property", "created_at"]
+    list_filter = ["created_at"]
+    search_fields = ["user__email", "property__title", "property__city"]
     readonly_fields = ["created_at"]

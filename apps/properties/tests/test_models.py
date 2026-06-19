@@ -1,9 +1,10 @@
 from decimal import Decimal
 
 import pytest
+from django.db import IntegrityError
 
 from apps.properties.choices import PropertyStatus, PropertyType
-from apps.properties.models import Property
+from apps.properties.models import Favorite, Property
 
 
 @pytest.mark.django_db
@@ -49,3 +50,19 @@ def test_land_property_flag(user, property_payload):
     prop = Property.objects.create(owner=user, **property_payload)
 
     assert prop.is_land is True
+
+
+@pytest.mark.django_db
+def test_favorite_is_unique_per_user_and_property(user, property_listing):
+    Favorite.objects.create(user=user, property=property_listing)
+
+    with pytest.raises(IntegrityError):
+        Favorite.objects.create(user=user, property=property_listing)
+
+
+@pytest.mark.django_db
+def test_different_users_can_favorite_same_property(user, other_user, property_listing):
+    Favorite.objects.create(user=user, property=property_listing)
+    Favorite.objects.create(user=other_user, property=property_listing)
+
+    assert Favorite.objects.filter(property=property_listing).count() == 2

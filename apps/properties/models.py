@@ -137,3 +137,34 @@ class PropertyImage(UUIDPrimaryKeyMixin):
     def set_as_cover(self) -> None:
         self.is_cover = True
         self.save(update_fields=["is_cover"])
+
+
+class Favorite(UUIDPrimaryKeyMixin):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="favorites",
+    )
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.CASCADE,
+        related_name="favorites",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "property"],
+                name="unique_favorite_per_user_property",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user"]),
+            models.Index(fields=["property"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} saved {self.property_id}"
