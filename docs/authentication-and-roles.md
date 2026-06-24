@@ -137,7 +137,7 @@ Content-Type: application/json
 3. Suspended users cannot authenticate or use existing JWTs.
 4. Tenant and buyer roles are auto-approved.
 5. Landlord role is auto-approved while `LANDLORD_ROLE_AUTO_APPROVAL=true`.
-6. Agent, artisan, lawyer, and inspector roles require admin approval.
+6. Agent, artisan, and inspector roles require admin approval.
 7. Admin and super admin roles cannot be self-assigned.
 8. Users cannot approve or reject their own role requests.
 9. Role request and decision actions create audit logs.

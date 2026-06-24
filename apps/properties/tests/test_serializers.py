@@ -1,7 +1,7 @@
 import pytest
 from rest_framework.test import APIRequestFactory
 
-from apps.properties.choices import PropertyStatus, PropertyType
+from apps.properties.choices import ListingType, PropertyStatus, PropertyType
 from apps.properties.serializers import PropertySerializer
 
 
@@ -40,6 +40,31 @@ def test_serializer_requires_land_size_for_land(user, property_payload):
 
     assert not serializer.is_valid()
     assert "land_size" in serializer.errors
+
+
+@pytest.mark.django_db
+def test_serializer_accepts_apartment_share_for_apartment(user, property_payload):
+    property_payload["property_type"] = PropertyType.APARTMENT
+    property_payload["listing_type"] = ListingType.APARTMENT_SHARE
+    request = APIRequestFactory().post("/")
+    request.user = user
+
+    serializer = PropertySerializer(data=property_payload, context={"request": request})
+
+    assert serializer.is_valid(), serializer.errors
+
+
+@pytest.mark.django_db
+def test_serializer_rejects_apartment_share_for_non_apartment(user, property_payload):
+    property_payload["property_type"] = PropertyType.HOUSE
+    property_payload["listing_type"] = ListingType.APARTMENT_SHARE
+    request = APIRequestFactory().post("/")
+    request.user = user
+
+    serializer = PropertySerializer(data=property_payload, context={"request": request})
+
+    assert not serializer.is_valid()
+    assert "property_type" in serializer.errors
 
 
 @pytest.mark.django_db

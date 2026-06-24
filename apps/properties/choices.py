@@ -4,6 +4,7 @@ from django.db import models
 class ListingType(models.TextChoices):
     SALE = "sale", "Sale"
     RENT = "rent", "Rent"
+    APARTMENT_SHARE = "apartment_share", "Apartment Share"
 
 
 class PropertyStatus(models.TextChoices):

@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.accounts.choices import UserRoleStatus
+from apps.accounts.choices import RoleName, UserRoleStatus
 from apps.accounts.models import Role, User, UserRole
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.serializers import (
@@ -128,7 +128,7 @@ class MeView(APIView):
 
 
 class RoleListView(generics.ListAPIView):
-    queryset = Role.objects.all()
+    queryset = Role.objects.filter(name__in=RoleName.values)
     serializer_class = RoleSerializer
     permission_classes = [IsAuthenticated]
 

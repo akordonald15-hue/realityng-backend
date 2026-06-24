@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from apps.accounts.choices import RoleName, UserRoleStatus
-from apps.accounts.models import AuditLog, UserRole
+from apps.accounts.models import AuditLog, Role, UserRole
 
 
 @pytest.mark.django_db
@@ -27,6 +27,31 @@ def test_professional_role_request_is_pending(api_client, user, roles):
     assert response.status_code == status.HTTP_201_CREATED
     user_role = UserRole.objects.get(user=user, role=roles[RoleName.AGENT])
     assert user_role.status == UserRoleStatus.PENDING
+
+
+@pytest.mark.django_db
+def test_cancelled_lawyer_role_is_not_listed_or_requestable(api_client, user):
+    Role.objects.update_or_create(
+        name="lawyer",
+        defaults={"description": "Legacy role that is no longer supported."},
+    )
+    api_client.force_authenticate(user)
+
+    list_response = api_client.get(reverse("roles-list"))
+    request_response = api_client.post(
+        reverse("roles-request"),
+        {"role": "lawyer"},
+        format="json",
+    )
+
+    assert list_response.status_code == status.HTTP_200_OK
+    role_results = (
+        list_response.data["results"]
+        if isinstance(list_response.data, dict)
+        else list_response.data
+    )
+    assert all(role["name"] != "lawyer" for role in role_results)
+    assert request_response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 @pytest.mark.django_db

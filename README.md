@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the backend foundation for RealityNG. Sprint 1 adds authentication, roles, user profiles, JWT sessions, role approval workflows, reusable permissions, and audit logs for role requests. Sprint 2 adds property listing CRUD, review workflow, and public approved-listing browsing APIs. Sprint 3 adds property image upload and gallery management.
+This repository contains the RealityNG backend through Sprint 4.5 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, dashboard summaries, and apartment-share listing support.
 
 ## Repository Structure
 
@@ -144,17 +144,16 @@ Seeded roles:
 3. `landlord`
 4. `agent`
 5. `artisan`
-6. `lawyer`
-7. `inspector`
-8. `admin`
-9. `super_admin`
+6. `inspector`
+7. `admin`
+8. `super_admin`
 
 Flow:
 
 1. Authenticated users list roles through `GET /api/v1/roles/`.
 2. Users request roles through `POST /api/v1/roles/request/`.
 3. `tenant`, `buyer`, and MVP `landlord` requests are auto-approved.
-4. `agent`, `artisan`, `lawyer`, and `inspector` requests remain pending until admin approval.
+4. `agent`, `artisan`, and `inspector` requests remain pending until admin approval.
 5. `admin` and `super_admin` cannot be self-assigned.
 6. Admins review pending requests through `GET /api/v1/admin/role-requests/`.
 7. Admins approve or reject through the role request decision endpoints.
@@ -188,6 +187,8 @@ Public browsing returns approved listings only and supports:
 2. Ordering by `created_at`, `price`, `title`, and `featured`
 3. Search by title through `search`
 4. Filters for `city`, `property_type`, `listing_type`, `min_price`, and `max_price`
+
+Supported listing types are `sale`, `rent`, and `apartment_share`. Apartment-share listings must use the apartment property type.
 
 Listings are soft-deleted through the shared `SoftDeleteMixin`. Updating an approved listing moves it back to `draft` so it can be reviewed again.
 

@@ -7,7 +7,6 @@ class RoleName(models.TextChoices):
     LANDLORD = "landlord", "Landlord"
     AGENT = "agent", "Agent"
     ARTISAN = "artisan", "Artisan"
-    LAWYER = "lawyer", "Lawyer"
     INSPECTOR = "inspector", "Inspector"
     ADMIN = "admin", "Admin"
     SUPER_ADMIN = "super_admin", "Super Admin"
@@ -33,6 +32,5 @@ ADMIN_ONLY_ROLES = {
 PROFESSIONAL_ROLES = {
     RoleName.AGENT,
     RoleName.ARTISAN,
-    RoleName.LAWYER,
     RoleName.INSPECTOR,
 }

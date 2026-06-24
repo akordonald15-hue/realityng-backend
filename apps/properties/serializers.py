@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from rest_framework import serializers
 
-from apps.properties.choices import PropertyStatus, PropertyType
+from apps.properties.choices import ListingType, PropertyStatus, PropertyType
 from apps.properties.models import Favorite, Property, PropertyImage
 
 PROPERTY_MUTABLE_FIELDS = [
@@ -33,7 +33,7 @@ def build_media_url(file_field, request=None) -> str:
     internal_endpoint = getattr(settings, "MINIO_ENDPOINT", "").rstrip("/")
     public_endpoint = getattr(settings, "MINIO_PUBLIC_ENDPOINT", internal_endpoint).rstrip("/")
     if internal_endpoint and public_endpoint and url.startswith(internal_endpoint):
-        url = f"{public_endpoint}{url[len(internal_endpoint):]}"
+        url = f"{public_endpoint}{url[len(internal_endpoint) :]}"
     if request and url.startswith("/"):
         return request.build_absolute_uri(url)
     return url
@@ -205,11 +205,15 @@ class PropertySerializer(serializers.ModelSerializer):
             )
 
         property_type = data.get("property_type")
+        listing_type = data.get("listing_type")
+        if listing_type == ListingType.APARTMENT_SHARE and property_type != PropertyType.APARTMENT:
+            raise serializers.ValidationError(
+                {"property_type": "Apartment share listings must use the apartment property type."}
+            )
+
         if property_type == PropertyType.LAND:
             if not data.get("land_size"):
-                raise serializers.ValidationError(
-                    {"land_size": "Land listings require land size."}
-                )
+                raise serializers.ValidationError({"land_size": "Land listings require land size."})
         elif not data.get("floor_area"):
             raise serializers.ValidationError(
                 {"floor_area": "Built property listings require floor area."}

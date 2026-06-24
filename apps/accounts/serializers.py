@@ -26,7 +26,7 @@ class RoleSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "description", "created_at", "approval_required"]
 
     def get_approval_required(self, role: Role) -> bool:
-        return role.name in {RoleName.AGENT, RoleName.ARTISAN, RoleName.LAWYER, RoleName.INSPECTOR}
+        return role.name in {RoleName.AGENT, RoleName.ARTISAN, RoleName.INSPECTOR}
 
 
 class UserRoleSerializer(serializers.ModelSerializer):
