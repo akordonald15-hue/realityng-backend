@@ -24,3 +24,24 @@ class PropertyType(models.TextChoices):
     SHOP = "shop", "Shop"
     WAREHOUSE = "warehouse", "Warehouse"
     MIXED_USE = "mixed_use", "Mixed Use"
+
+
+class InquiryType(models.TextChoices):
+    RENT = "rent", "Rent"
+    PURCHASE = "purchase", "Purchase"
+    APARTMENT_SHARE = "apartment_share", "Apartment Share"
+
+
+class InquiryStatus(models.TextChoices):
+    NEW = "new", "New"
+    CONTACTED = "contacted", "Contacted"
+    VIEWING_SCHEDULED = "viewing_scheduled", "Viewing Scheduled"
+    NEGOTIATING = "negotiating", "Negotiating"
+    CONVERTED = "converted", "Converted"
+    CLOSED = "closed", "Closed"
+
+
+class ContactPreference(models.TextChoices):
+    EMAIL = "email", "Email"
+    PHONE = "phone", "Phone"
+    WHATSAPP = "whatsapp", "WhatsApp"

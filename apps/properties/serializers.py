@@ -3,8 +3,14 @@ from __future__ import annotations
 from django.conf import settings
 from rest_framework import serializers
 
-from apps.properties.choices import ListingType, PropertyStatus, PropertyType
-from apps.properties.models import Favorite, Property, PropertyImage
+from apps.properties.choices import (
+    InquiryStatus,
+    InquiryType,
+    ListingType,
+    PropertyStatus,
+    PropertyType,
+)
+from apps.properties.models import Favorite, Inquiry, Property, PropertyImage
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -344,7 +350,151 @@ class DashboardSummarySerializer(serializers.Serializer):
     saved_properties_count = serializers.IntegerField()
     active_listings_count = serializers.IntegerField()
     draft_listings_count = serializers.IntegerField()
+    my_inquiries_count = serializers.IntegerField(required=False)
+    received_inquiries_count = serializers.IntegerField(required=False)
 
 
 class PropertyReviewDecisionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class InquiryUserSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    full_name = serializers.CharField()
+    phone_number = serializers.CharField(allow_null=True)
+
+
+class InquiryPropertySummarySerializer(serializers.ModelSerializer):
+    cover_image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Property
+        fields = [
+            "id",
+            "title",
+            "slug",
+            "listing_type",
+            "property_type",
+            "price",
+            "currency",
+            "city",
+            "state",
+            "cover_image_url",
+        ]
+
+    def get_cover_image_url(self, obj: Property) -> str:
+        cover = next((image for image in obj.images.all() if image.is_cover), None)
+        return build_media_url(cover.image, self.context.get("request")) if cover else ""
+
+
+def inquiry_type_for_property(prop: Property) -> str:
+    if prop.listing_type == ListingType.SALE:
+        return InquiryType.PURCHASE
+    if prop.listing_type == ListingType.APARTMENT_SHARE:
+        return InquiryType.APARTMENT_SHARE
+    return InquiryType.RENT
+
+
+class InquirySerializer(serializers.ModelSerializer):
+    property_id = serializers.UUIDField(write_only=True)
+    property = InquiryPropertySummarySerializer(read_only=True)
+    interested_user = serializers.SerializerMethodField()
+    property_owner = serializers.SerializerMethodField()
+    internal_notes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Inquiry
+        fields = [
+            "id",
+            "property_id",
+            "property",
+            "interested_user",
+            "property_owner",
+            "inquiry_type",
+            "message",
+            "contact_preference",
+            "status",
+            "internal_notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "property",
+            "interested_user",
+            "property_owner",
+            "status",
+            "internal_notes",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_interested_user(self, obj: Inquiry) -> dict:
+        return InquiryUserSerializer(obj.interested_user).data
+
+    def get_property_owner(self, obj: Inquiry) -> dict:
+        return InquiryUserSerializer(obj.property_owner).data
+
+    def get_internal_notes(self, obj: Inquiry) -> str:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and user.id == obj.property_owner_id:
+            return obj.internal_notes
+        return ""
+
+    def validate_property_id(self, value):
+        try:
+            prop = Property.objects.select_related("owner").get(id=value)
+        except Property.DoesNotExist as exc:
+            raise serializers.ValidationError("Property is not available.") from exc
+
+        if prop.status != PropertyStatus.APPROVED:
+            raise serializers.ValidationError("Property is not available for inquiries.")
+
+        request = self.context["request"]
+        if prop.owner_id == request.user.id:
+            raise serializers.ValidationError("You cannot create an inquiry for your own property.")
+
+        self.context["property"] = prop
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        prop = self.context.get("property")
+        if not prop:
+            return attrs
+
+        expected_type = inquiry_type_for_property(prop)
+        inquiry_type = attrs.get("inquiry_type") or expected_type
+        if inquiry_type != expected_type:
+            raise serializers.ValidationError(
+                {"inquiry_type": f"This property accepts {expected_type} inquiries."}
+            )
+        attrs["inquiry_type"] = inquiry_type
+        return attrs
+
+    def create(self, validated_data: dict) -> Inquiry:
+        validated_data.pop("property_id")
+        prop = self.context["property"]
+        return Inquiry.objects.create(
+            property=prop,
+            interested_user=self.context["request"].user,
+            property_owner=prop.owner,
+            **validated_data,
+        )
+
+
+class InquiryStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=InquiryStatus.choices)
+
+    def validate_status(self, value: str) -> str:
+        inquiry = self.context["inquiry"]
+        if value != inquiry.status and not inquiry.can_transition_to(value):
+            raise serializers.ValidationError(
+                f"Inquiry cannot move from {inquiry.status} to {value}."
+            )
+        return value
+
+
+class InquiryNotesSerializer(serializers.Serializer):
+    internal_notes = serializers.CharField(allow_blank=True, required=True)

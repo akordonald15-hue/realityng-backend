@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from apps.properties.views import (
     DashboardSummaryView,
     FavoriteViewSet,
+    InquiryViewSet,
     PropertyViewSet,
     PublicPropertyViewSet,
 )
@@ -12,6 +13,7 @@ router = DefaultRouter()
 router.register("properties", PropertyViewSet, basename="properties")
 router.register("public/properties", PublicPropertyViewSet, basename="public-properties")
 router.register("favorites", FavoriteViewSet, basename="favorites")
+router.register("inquiries", InquiryViewSet, basename="inquiries")
 
 urlpatterns = [
     path("dashboard/summary/", DashboardSummaryView.as_view(), name="dashboard-summary"),

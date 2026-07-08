@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -13,19 +13,23 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
-from apps.properties.choices import PropertyStatus
+from apps.properties.choices import InquiryStatus, PropertyStatus
 from apps.properties.filters import PublicPropertyFilter
-from apps.properties.models import Favorite, Property, PropertyImage
+from apps.properties.models import Favorite, Inquiry, Property, PropertyImage
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
     DashboardSummarySerializer,
     FavoriteSerializer,
+    InquiryNotesSerializer,
+    InquirySerializer,
+    InquiryStatusUpdateSerializer,
     PropertyImageMetadataSerializer,
     PropertyImageSerializer,
     PropertyReviewDecisionSerializer,
     PropertySerializer,
     PublicPropertySerializer,
 )
+from apps.properties.services import emit_inquiry_event
 
 
 class PropertyViewSet(viewsets.ModelViewSet):
@@ -318,6 +322,124 @@ class FavoriteViewSet(
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class InquiryViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Inquiry.objects.none()
+    serializer_class = InquirySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Inquiry.objects.none()
+
+        user = self.request.user
+        queryset = (
+            Inquiry.objects.select_related("property", "property__owner", "interested_user")
+            .prefetch_related("property__images")
+            .filter(property__deleted_at__isnull=True)
+        )
+        if user_is_admin(user):
+            return queryset
+        if self.action == "received":
+            return queryset.filter(property_owner=user)
+        return queryset.filter(Q(interested_user=user) | Q(property_owner=user))
+
+    @extend_schema(request=InquirySerializer, responses={201: InquirySerializer})
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        inquiry = serializer.save()
+        emit_inquiry_event(
+            actor=request.user,
+            inquiry=inquiry,
+            event_name="inquiry.created",
+            metadata={"notification_event": "InquiryCreated"},
+        )
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            InquirySerializer(inquiry, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    @extend_schema(responses={200: InquirySerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="received")
+    def received(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=InquiryStatusUpdateSerializer, responses={200: InquirySerializer})
+    @action(detail=True, methods=["post"], url_path="status")
+    def update_status(self, request, pk=None):
+        inquiry = self.get_object()
+        if not self._can_manage_inquiry(request.user, inquiry):
+            return Response(
+                {"detail": "Only the property owner can update inquiry status."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = InquiryStatusUpdateSerializer(
+            data=request.data,
+            context={"inquiry": inquiry},
+        )
+        serializer.is_valid(raise_exception=True)
+        previous_status = inquiry.status
+        next_status = serializer.validated_data["status"]
+        inquiry.transition_to(next_status)
+
+        event_name = (
+            "inquiry.closed"
+            if next_status == InquiryStatus.CLOSED
+            else "inquiry.status_changed"
+        )
+        emit_inquiry_event(
+            actor=request.user,
+            inquiry=inquiry,
+            event_name=event_name,
+            metadata={
+                "notification_event": "InquiryStatusChanged",
+                "previous_status": previous_status,
+                "next_status": next_status,
+            },
+        )
+        return Response(InquirySerializer(inquiry, context=self.get_serializer_context()).data)
+
+    @extend_schema(request=InquiryNotesSerializer, responses={200: InquirySerializer})
+    @action(detail=True, methods=["patch"], url_path="notes")
+    def update_notes(self, request, pk=None):
+        inquiry = self.get_object()
+        if not self._can_manage_inquiry(request.user, inquiry):
+            return Response(
+                {"detail": "Only the property owner can update internal notes."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = InquiryNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        inquiry.internal_notes = serializer.validated_data["internal_notes"]
+        inquiry.save(update_fields=["internal_notes", "updated_at"])
+        emit_inquiry_event(
+            actor=request.user,
+            inquiry=inquiry,
+            event_name="inquiry.updated",
+            metadata={"notification_event": "InquiryUpdated", "field": "internal_notes"},
+        )
+        return Response(InquirySerializer(inquiry, context=self.get_serializer_context()).data)
+
+    def _can_manage_inquiry(self, user, inquiry: Inquiry) -> bool:
+        return user_is_admin(user) or inquiry.property_owner_id == user.id
+
+
 class DashboardSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -335,6 +457,14 @@ class DashboardSummaryView(APIView):
             "draft_listings_count": Property.objects.filter(
                 owner=request.user,
                 status=PropertyStatus.DRAFT,
+            ).count(),
+            "my_inquiries_count": Inquiry.objects.filter(
+                interested_user=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "received_inquiries_count": Inquiry.objects.filter(
+                property_owner=request.user,
+                property__deleted_at__isnull=True,
             ).count(),
         }
         return Response(DashboardSummarySerializer(data).data)

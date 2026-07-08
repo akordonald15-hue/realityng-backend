@@ -7,7 +7,14 @@ from django.db import models, transaction
 from django.utils.text import slugify
 
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
-from apps.properties.choices import ListingType, PropertyStatus, PropertyType
+from apps.properties.choices import (
+    ContactPreference,
+    InquiryStatus,
+    InquiryType,
+    ListingType,
+    PropertyStatus,
+    PropertyType,
+)
 
 
 def property_image_upload_to(instance: PropertyImage, filename: str) -> str:
@@ -168,3 +175,67 @@ class Favorite(UUIDPrimaryKeyMixin):
 
     def __str__(self) -> str:
         return f"{self.user_id} saved {self.property_id}"
+
+
+class Inquiry(BaseModel):
+    VALID_STATUS_TRANSITIONS = {
+        InquiryStatus.NEW: {InquiryStatus.CONTACTED, InquiryStatus.CLOSED},
+        InquiryStatus.CONTACTED: {InquiryStatus.VIEWING_SCHEDULED, InquiryStatus.CLOSED},
+        InquiryStatus.VIEWING_SCHEDULED: {InquiryStatus.NEGOTIATING, InquiryStatus.CLOSED},
+        InquiryStatus.NEGOTIATING: {InquiryStatus.CONVERTED, InquiryStatus.CLOSED},
+        InquiryStatus.CONVERTED: set(),
+        InquiryStatus.CLOSED: set(),
+    }
+
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.PROTECT,
+        related_name="inquiries",
+    )
+    interested_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="property_inquiries",
+    )
+    property_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="received_property_inquiries",
+    )
+    inquiry_type = models.CharField(max_length=32, choices=InquiryType.choices)
+    message = models.TextField(blank=True)
+    contact_preference = models.CharField(
+        max_length=20,
+        choices=ContactPreference.choices,
+        default=ContactPreference.EMAIL,
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=InquiryStatus.choices,
+        default=InquiryStatus.NEW,
+    )
+    internal_notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["interested_user", "status", "created_at"]),
+            models.Index(fields=["property_owner", "status", "created_at"]),
+            models.Index(fields=["property", "status"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["inquiry_type"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_inquiry_type_display()} inquiry for {self.property.title}"
+
+    def can_transition_to(self, next_status: str) -> bool:
+        return next_status in self.VALID_STATUS_TRANSITIONS.get(self.status, set())
+
+    def transition_to(self, next_status: str) -> None:
+        if next_status == self.status:
+            return
+        if not self.can_transition_to(next_status):
+            raise ValueError(f"Inquiry cannot move from {self.status} to {next_status}.")
+        self.status = next_status
+        self.save(update_fields=["status", "updated_at"])

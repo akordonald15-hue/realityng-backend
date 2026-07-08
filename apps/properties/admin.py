@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.properties.models import Favorite, Property, PropertyImage
+from apps.properties.models import Favorite, Inquiry, Property, PropertyImage
 
 
 class PropertyImageInline(admin.TabularInline):
@@ -44,3 +44,25 @@ class FavoriteAdmin(admin.ModelAdmin):
     list_filter = ["created_at"]
     search_fields = ["user__email", "property__title", "property__city"]
     readonly_fields = ["created_at"]
+
+
+@admin.register(Inquiry)
+class InquiryAdmin(admin.ModelAdmin):
+    list_display = [
+        "property",
+        "interested_user",
+        "property_owner",
+        "inquiry_type",
+        "contact_preference",
+        "status",
+        "created_at",
+    ]
+    list_filter = ["status", "inquiry_type", "contact_preference", "created_at"]
+    search_fields = [
+        "property__title",
+        "interested_user__email",
+        "property_owner__email",
+        "message",
+        "internal_notes",
+    ]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
