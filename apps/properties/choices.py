@@ -58,3 +58,11 @@ class ViewingStatus(models.TextChoices):
     CONFIRMED = "confirmed", "Confirmed"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
+
+
+class RentalApplicationStatus(models.TextChoices):
+    SUBMITTED = "submitted", "Submitted"
+    UNDER_REVIEW = "under_review", "Under Review"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+    WITHDRAWN = "withdrawn", "Withdrawn"

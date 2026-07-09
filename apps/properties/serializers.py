@@ -4,14 +4,24 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.accounts.services import user_is_admin
 from apps.properties.choices import (
     InquiryStatus,
     InquiryType,
     ListingType,
     PropertyStatus,
     PropertyType,
+    RentalApplicationStatus,
+    ViewingStatus,
 )
-from apps.properties.models import Favorite, Inquiry, Property, PropertyImage, Viewing
+from apps.properties.models import (
+    Favorite,
+    Inquiry,
+    Property,
+    PropertyImage,
+    RentalApplication,
+    Viewing,
+)
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -355,6 +365,8 @@ class DashboardSummarySerializer(serializers.Serializer):
     received_inquiries_count = serializers.IntegerField(required=False)
     my_viewings_count = serializers.IntegerField(required=False)
     received_viewings_count = serializers.IntegerField(required=False)
+    my_applications_count = serializers.IntegerField(required=False)
+    received_applications_count = serializers.IntegerField(required=False)
 
 
 class PropertyReviewDecisionSerializer(serializers.Serializer):
@@ -613,3 +625,163 @@ class ViewingDecisionSerializer(serializers.Serializer):
 
 class ViewingNotesSerializer(serializers.Serializer):
     notes = serializers.CharField(allow_blank=True, required=True)
+
+
+class RentalApplicationSerializer(serializers.ModelSerializer):
+    property_id = serializers.UUIDField(write_only=True)
+    inquiry_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    viewing_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    property = InquiryPropertySummarySerializer(read_only=True)
+    applicant = serializers.SerializerMethodField()
+    property_owner = serializers.SerializerMethodField()
+    inquiry = serializers.UUIDField(source="inquiry.id", read_only=True)
+    viewing = serializers.UUIDField(source="viewing.id", read_only=True)
+    owner_notes = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RentalApplication
+        fields = [
+            "id",
+            "property_id",
+            "property",
+            "applicant",
+            "property_owner",
+            "inquiry_id",
+            "inquiry",
+            "viewing_id",
+            "viewing",
+            "full_name",
+            "email",
+            "phone",
+            "employment_status",
+            "employer_name",
+            "monthly_income",
+            "move_in_date",
+            "message",
+            "status",
+            "owner_notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "property",
+            "applicant",
+            "property_owner",
+            "inquiry",
+            "viewing",
+            "status",
+            "owner_notes",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_applicant(self, obj: RentalApplication) -> dict:
+        return InquiryUserSerializer(obj.applicant).data
+
+    def get_property_owner(self, obj: RentalApplication) -> dict:
+        return InquiryUserSerializer(obj.property_owner).data
+
+    def get_owner_notes(self, obj: RentalApplication) -> str:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and (
+            user.id == obj.property_owner_id or user_is_admin(user)
+        ):
+            return obj.owner_notes
+        return ""
+
+    def validate_property_id(self, value):
+        try:
+            prop = Property.objects.select_related("owner").get(id=value)
+        except Property.DoesNotExist as exc:
+            raise serializers.ValidationError("Property is not available.") from exc
+
+        request = self.context["request"]
+        if prop.status != PropertyStatus.APPROVED:
+            raise serializers.ValidationError("Property is not available for applications.")
+        if prop.owner_id == request.user.id:
+            raise serializers.ValidationError("You cannot apply for your own property.")
+        if prop.deleted_at:
+            raise serializers.ValidationError("Property is not available for applications.")
+
+        self.context["property"] = prop
+        return value
+
+    def validate_monthly_income(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Monthly income must be greater than zero.")
+        return value
+
+    def validate_move_in_date(self, value):
+        if value < timezone.localdate():
+            raise serializers.ValidationError("Move-in date cannot be in the past.")
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        prop = self.context.get("property")
+        request = self.context["request"]
+        inquiry_id = attrs.get("inquiry_id")
+        viewing_id = attrs.get("viewing_id")
+
+        if inquiry_id:
+            try:
+                inquiry = Inquiry.objects.get(id=inquiry_id)
+            except Inquiry.DoesNotExist as exc:
+                raise serializers.ValidationError(
+                    {"inquiry_id": "Inquiry is not available."}
+                ) from exc
+            if inquiry.interested_user_id != request.user.id or inquiry.property_id != prop.id:
+                raise serializers.ValidationError(
+                    {"inquiry_id": "Inquiry must belong to this applicant and property."}
+                )
+            self.context["inquiry"] = inquiry
+
+        if viewing_id:
+            try:
+                viewing = Viewing.objects.get(id=viewing_id)
+            except Viewing.DoesNotExist as exc:
+                raise serializers.ValidationError(
+                    {"viewing_id": "Viewing is not available."}
+                ) from exc
+            if viewing.requester_id != request.user.id or viewing.property_id != prop.id:
+                raise serializers.ValidationError(
+                    {"viewing_id": "Viewing must belong to this applicant and property."}
+                )
+            if viewing.status not in {ViewingStatus.CONFIRMED, ViewingStatus.COMPLETED}:
+                raise serializers.ValidationError(
+                    {"viewing_id": "Applications can only link confirmed or completed viewings."}
+                )
+            self.context["viewing"] = viewing
+
+        return attrs
+
+    def create(self, validated_data: dict) -> RentalApplication:
+        validated_data.pop("property_id")
+        validated_data.pop("inquiry_id", None)
+        validated_data.pop("viewing_id", None)
+        prop = self.context["property"]
+        return RentalApplication.objects.create(
+            property=prop,
+            applicant=self.context["request"].user,
+            property_owner=prop.owner,
+            inquiry=self.context.get("inquiry"),
+            viewing=self.context.get("viewing"),
+            **validated_data,
+        )
+
+
+class RentalApplicationStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=RentalApplicationStatus.choices)
+
+    def validate_status(self, value: str) -> str:
+        application = self.context["application"]
+        if value != application.status and not application.can_transition_to(value):
+            raise serializers.ValidationError(
+                f"Application cannot move from {application.status} to {value}."
+            )
+        return value
+
+
+class RentalApplicationNotesSerializer(serializers.Serializer):
+    owner_notes = serializers.CharField(allow_blank=True, required=True)

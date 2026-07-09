@@ -126,6 +126,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "ENUM_NAME_OVERRIDES": {
         "InquiryStatusEnum": "apps.properties.choices.InquiryStatus",
+        "RentalApplicationStatusEnum": "apps.properties.choices.RentalApplicationStatus",
         "RoleEnum": "apps.accounts.choices.RoleName",
         "ViewingStatusEnum": "apps.properties.choices.ViewingStatus",
     },

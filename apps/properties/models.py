@@ -14,6 +14,7 @@ from apps.properties.choices import (
     ListingType,
     PropertyStatus,
     PropertyType,
+    RentalApplicationStatus,
     ViewingStatus,
     ViewingType,
 )
@@ -316,5 +317,91 @@ class Viewing(BaseModel):
             return
         if not self.can_transition_to(next_status):
             raise ValueError(f"Viewing cannot move from {self.status} to {next_status}.")
+        self.status = next_status
+        self.save(update_fields=["status", "updated_at"])
+
+
+class RentalApplication(BaseModel):
+    VALID_STATUS_TRANSITIONS = {
+        RentalApplicationStatus.SUBMITTED: {
+            RentalApplicationStatus.UNDER_REVIEW,
+            RentalApplicationStatus.WITHDRAWN,
+        },
+        RentalApplicationStatus.UNDER_REVIEW: {
+            RentalApplicationStatus.APPROVED,
+            RentalApplicationStatus.REJECTED,
+            RentalApplicationStatus.WITHDRAWN,
+        },
+        RentalApplicationStatus.APPROVED: set(),
+        RentalApplicationStatus.REJECTED: set(),
+        RentalApplicationStatus.WITHDRAWN: set(),
+    }
+
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.PROTECT,
+        related_name="rental_applications",
+    )
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="rental_applications",
+    )
+    property_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="received_rental_applications",
+    )
+    inquiry = models.ForeignKey(
+        Inquiry,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rental_applications",
+    )
+    viewing = models.ForeignKey(
+        Viewing,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rental_applications",
+    )
+    full_name = models.CharField(max_length=160)
+    email = models.EmailField()
+    phone = models.CharField(max_length=40)
+    employment_status = models.CharField(max_length=80)
+    employer_name = models.CharField(max_length=160, blank=True)
+    monthly_income = models.DecimalField(max_digits=14, decimal_places=2)
+    move_in_date = models.DateField()
+    message = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=32,
+        choices=RentalApplicationStatus.choices,
+        default=RentalApplicationStatus.SUBMITTED,
+    )
+    owner_notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["applicant", "status", "created_at"]),
+            models.Index(fields=["property_owner", "status", "created_at"]),
+            models.Index(fields=["property", "status"]),
+            models.Index(fields=["inquiry", "status"]),
+            models.Index(fields=["viewing", "status"]),
+            models.Index(fields=["move_in_date"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Application from {self.full_name} for {self.property.title}"
+
+    def can_transition_to(self, next_status: str) -> bool:
+        return next_status in self.VALID_STATUS_TRANSITIONS.get(self.status, set())
+
+    def transition_to(self, next_status: str) -> None:
+        if next_status == self.status:
+            return
+        if not self.can_transition_to(next_status):
+            raise ValueError(f"Application cannot move from {self.status} to {next_status}.")
         self.status = next_status
         self.save(update_fields=["status", "updated_at"])

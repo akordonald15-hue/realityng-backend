@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from apps.properties.models import Favorite, Inquiry, Property, PropertyImage, Viewing
+from apps.properties.models import (
+    Favorite,
+    Inquiry,
+    Property,
+    PropertyImage,
+    RentalApplication,
+    Viewing,
+)
 
 
 class PropertyImageInline(admin.TabularInline):
@@ -87,5 +94,32 @@ class ViewingAdmin(admin.ModelAdmin):
         "property_owner__email",
         "meeting_location",
         "notes",
+    ]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
+
+
+@admin.register(RentalApplication)
+class RentalApplicationAdmin(admin.ModelAdmin):
+    list_display = [
+        "property",
+        "applicant",
+        "property_owner",
+        "full_name",
+        "employment_status",
+        "move_in_date",
+        "status",
+        "created_at",
+    ]
+    list_filter = ["status", "employment_status", "move_in_date", "created_at"]
+    search_fields = [
+        "property__title",
+        "applicant__email",
+        "property_owner__email",
+        "full_name",
+        "email",
+        "phone",
+        "employer_name",
+        "message",
+        "owner_notes",
     ]
     readonly_fields = ["created_at", "updated_at", "deleted_at"]

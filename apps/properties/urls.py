@@ -7,6 +7,7 @@ from apps.properties.views import (
     InquiryViewSet,
     PropertyViewSet,
     PublicPropertyViewSet,
+    RentalApplicationViewSet,
     ViewingViewSet,
 )
 
@@ -16,6 +17,7 @@ router.register("public/properties", PublicPropertyViewSet, basename="public-pro
 router.register("favorites", FavoriteViewSet, basename="favorites")
 router.register("inquiries", InquiryViewSet, basename="inquiries")
 router.register("viewings", ViewingViewSet, basename="viewings")
+router.register("applications", RentalApplicationViewSet, basename="applications")
 
 urlpatterns = [
     path("dashboard/summary/", DashboardSummaryView.as_view(), name="dashboard-summary"),

@@ -13,9 +13,21 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
-from apps.properties.choices import InquiryStatus, PropertyStatus, ViewingStatus
+from apps.properties.choices import (
+    InquiryStatus,
+    PropertyStatus,
+    RentalApplicationStatus,
+    ViewingStatus,
+)
 from apps.properties.filters import PublicPropertyFilter
-from apps.properties.models import Favorite, Inquiry, Property, PropertyImage, Viewing
+from apps.properties.models import (
+    Favorite,
+    Inquiry,
+    Property,
+    PropertyImage,
+    RentalApplication,
+    Viewing,
+)
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
     DashboardSummarySerializer,
@@ -28,11 +40,14 @@ from apps.properties.serializers import (
     PropertyReviewDecisionSerializer,
     PropertySerializer,
     PublicPropertySerializer,
+    RentalApplicationNotesSerializer,
+    RentalApplicationSerializer,
+    RentalApplicationStatusUpdateSerializer,
     ViewingDecisionSerializer,
     ViewingNotesSerializer,
     ViewingSerializer,
 )
-from apps.properties.services import emit_inquiry_event, emit_viewing_event
+from apps.properties.services import emit_application_event, emit_inquiry_event, emit_viewing_event
 
 
 class PropertyViewSet(viewsets.ModelViewSet):
@@ -677,6 +692,209 @@ class ViewingViewSet(
         )
 
 
+class RentalApplicationViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = RentalApplication.objects.none()
+    serializer_class = RentalApplicationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return RentalApplication.objects.none()
+
+        user = self.request.user
+        queryset = (
+            RentalApplication.objects.select_related(
+                "property",
+                "property__owner",
+                "applicant",
+                "property_owner",
+                "inquiry",
+                "viewing",
+            )
+            .prefetch_related("property__images")
+            .filter(property__deleted_at__isnull=True)
+        )
+        if user_is_admin(user):
+            return queryset
+        if self.action == "received":
+            return queryset.filter(property_owner=user)
+        return queryset.filter(Q(applicant=user) | Q(property_owner=user))
+
+    @extend_schema(
+        request=RentalApplicationSerializer,
+        responses={201: RentalApplicationSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        application = serializer.save()
+        emit_application_event(
+            actor=request.user,
+            application=application,
+            event_name="application.submitted",
+            metadata={"notification_event": "ApplicationSubmitted"},
+        )
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            RentalApplicationSerializer(application, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    @extend_schema(responses={200: RentalApplicationSerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="received")
+    def received(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(responses={200: RentalApplicationSerializer})
+    @action(detail=True, methods=["post"], url_path="under-review")
+    def mark_under_review(self, request, pk=None):
+        application = self.get_object()
+        if not self._can_manage_application(request.user, application):
+            return Response(
+                {"detail": "Only the property owner can review applications."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return self._transition_application(
+            request=request,
+            application=application,
+            next_status=RentalApplicationStatus.UNDER_REVIEW,
+            event_name="application.under_review",
+            notification_event="ApplicationUnderReview",
+        )
+
+    @extend_schema(responses={200: RentalApplicationSerializer})
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        application = self.get_object()
+        if not self._can_manage_application(request.user, application):
+            return Response(
+                {"detail": "Only the property owner can approve applications."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return self._transition_application(
+            request=request,
+            application=application,
+            next_status=RentalApplicationStatus.APPROVED,
+            event_name="application.approved",
+            notification_event="ApplicationApproved",
+        )
+
+    @extend_schema(responses={200: RentalApplicationSerializer})
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        application = self.get_object()
+        if not self._can_manage_application(request.user, application):
+            return Response(
+                {"detail": "Only the property owner can reject applications."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return self._transition_application(
+            request=request,
+            application=application,
+            next_status=RentalApplicationStatus.REJECTED,
+            event_name="application.rejected",
+            notification_event="ApplicationRejected",
+        )
+
+    @extend_schema(responses={200: RentalApplicationSerializer})
+    @action(detail=True, methods=["post"], url_path="withdraw")
+    def withdraw(self, request, pk=None):
+        application = self.get_object()
+        if not self._is_application_applicant(request.user, application) and not user_is_admin(
+            request.user
+        ):
+            return Response(
+                {"detail": "Only the applicant can withdraw applications."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return self._transition_application(
+            request=request,
+            application=application,
+            next_status=RentalApplicationStatus.WITHDRAWN,
+            event_name="application.withdrawn",
+            notification_event="ApplicationWithdrawn",
+        )
+
+    @extend_schema(
+        request=RentalApplicationNotesSerializer,
+        responses={200: RentalApplicationSerializer},
+    )
+    @action(detail=True, methods=["patch"], url_path="notes")
+    def update_notes(self, request, pk=None):
+        application = self.get_object()
+        if not self._can_manage_application(request.user, application):
+            return Response(
+                {"detail": "Only the property owner can update owner notes."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = RentalApplicationNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        application.owner_notes = serializer.validated_data["owner_notes"]
+        application.save(update_fields=["owner_notes", "updated_at"])
+        emit_application_event(
+            actor=request.user,
+            application=application,
+            event_name="application.updated",
+            metadata={"notification_event": "ApplicationUpdated", "field": "owner_notes"},
+        )
+        return Response(
+            RentalApplicationSerializer(application, context=self.get_serializer_context()).data
+        )
+
+    def _transition_application(
+        self,
+        *,
+        request,
+        application: RentalApplication,
+        next_status: str,
+        event_name: str,
+        notification_event: str,
+    ) -> Response:
+        previous_status = application.status
+        serializer = RentalApplicationStatusUpdateSerializer(
+            data={"status": next_status},
+            context={"application": application},
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            application.transition_to(next_status)
+        except ValueError as exc:
+            return Response({"status": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+
+        emit_application_event(
+            actor=request.user,
+            application=application,
+            event_name=event_name,
+            metadata={
+                "notification_event": notification_event,
+                "previous_status": previous_status,
+                "next_status": next_status,
+            },
+        )
+        return Response(
+            RentalApplicationSerializer(application, context=self.get_serializer_context()).data
+        )
+
+    def _can_manage_application(self, user, application: RentalApplication) -> bool:
+        return user_is_admin(user) or application.property_owner_id == user.id
+
+    def _is_application_applicant(self, user, application: RentalApplication) -> bool:
+        return application.applicant_id == user.id
+
+
 class DashboardSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -708,6 +926,14 @@ class DashboardSummaryView(APIView):
                 property__deleted_at__isnull=True,
             ).count(),
             "received_viewings_count": Viewing.objects.filter(
+                property_owner=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "my_applications_count": RentalApplication.objects.filter(
+                applicant=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "received_applications_count": RentalApplication.objects.filter(
                 property_owner=request.user,
                 property__deleted_at__isnull=True,
             ).count(),
