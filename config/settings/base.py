@@ -127,6 +127,7 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "InquiryStatusEnum": "apps.properties.choices.InquiryStatus",
         "RoleEnum": "apps.accounts.choices.RoleName",
+        "ViewingStatusEnum": "apps.properties.choices.ViewingStatus",
     },
 }
 

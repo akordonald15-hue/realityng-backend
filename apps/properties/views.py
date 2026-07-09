@@ -13,9 +13,9 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
-from apps.properties.choices import InquiryStatus, PropertyStatus
+from apps.properties.choices import InquiryStatus, PropertyStatus, ViewingStatus
 from apps.properties.filters import PublicPropertyFilter
-from apps.properties.models import Favorite, Inquiry, Property, PropertyImage
+from apps.properties.models import Favorite, Inquiry, Property, PropertyImage, Viewing
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
     DashboardSummarySerializer,
@@ -28,8 +28,11 @@ from apps.properties.serializers import (
     PropertyReviewDecisionSerializer,
     PropertySerializer,
     PublicPropertySerializer,
+    ViewingDecisionSerializer,
+    ViewingNotesSerializer,
+    ViewingSerializer,
 )
-from apps.properties.services import emit_inquiry_event
+from apps.properties.services import emit_inquiry_event, emit_viewing_event
 
 
 class PropertyViewSet(viewsets.ModelViewSet):
@@ -440,6 +443,240 @@ class InquiryViewSet(
         return user_is_admin(user) or inquiry.property_owner_id == user.id
 
 
+class ViewingViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Viewing.objects.none()
+    serializer_class = ViewingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Viewing.objects.none()
+
+        user = self.request.user
+        queryset = (
+            Viewing.objects.select_related(
+                "inquiry",
+                "property",
+                "property__owner",
+                "requester",
+                "property_owner",
+            )
+            .prefetch_related("property__images")
+            .filter(property__deleted_at__isnull=True)
+        )
+        if user_is_admin(user):
+            return queryset
+        if self.action == "received":
+            return queryset.filter(property_owner=user)
+        return queryset.filter(Q(requester=user) | Q(property_owner=user))
+
+    @extend_schema(request=ViewingSerializer, responses={201: ViewingSerializer})
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        viewing = serializer.save()
+        emit_viewing_event(
+            actor=request.user,
+            viewing=viewing,
+            event_name="viewing.created",
+            metadata={"notification_event": "ViewingRequested"},
+        )
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            ViewingSerializer(viewing, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    @extend_schema(responses={200: ViewingSerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="received")
+    def received(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=ViewingDecisionSerializer, responses={200: ViewingSerializer})
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        viewing = self.get_object()
+        if not self._can_manage_viewing(request.user, viewing):
+            return Response(
+                {"detail": "Only the property owner can confirm viewing requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = ViewingDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            self._apply_viewing_decision(
+                viewing=viewing,
+                payload=serializer.validated_data,
+                next_status=ViewingStatus.CONFIRMED,
+                actor=request.user,
+                event_name="viewing.confirmed",
+                notification_event="ViewingConfirmed",
+            )
+        except ValueError as exc:
+            return Response({"status": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ViewingSerializer(viewing, context=self.get_serializer_context()).data)
+
+    @extend_schema(request=ViewingDecisionSerializer, responses={200: ViewingSerializer})
+    @action(detail=True, methods=["post"], url_path="reschedule")
+    def reschedule(self, request, pk=None):
+        viewing = self.get_object()
+        if not self._can_manage_viewing(request.user, viewing):
+            return Response(
+                {"detail": "Only the property owner can reschedule viewing requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = ViewingDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            self._apply_viewing_decision(
+                viewing=viewing,
+                payload=serializer.validated_data,
+                next_status=ViewingStatus.RESCHEDULED,
+                actor=request.user,
+                event_name="viewing.rescheduled",
+                notification_event="ViewingRescheduled",
+            )
+        except ValueError as exc:
+            return Response({"status": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ViewingSerializer(viewing, context=self.get_serializer_context()).data)
+
+    @extend_schema(request=ViewingNotesSerializer, responses={200: ViewingSerializer})
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        viewing = self.get_object()
+        if not self._is_viewing_participant(request.user, viewing):
+            return Response(
+                {"detail": "Only viewing participants can cancel viewing requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = ViewingNotesSerializer(
+            data={"notes": request.data.get("notes", viewing.notes)}
+        )
+        serializer.is_valid(raise_exception=True)
+        viewing.notes = serializer.validated_data["notes"]
+        try:
+            viewing.transition_to(ViewingStatus.CANCELLED)
+        except ValueError as exc:
+            return Response({"status": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        viewing.save(update_fields=["notes", "updated_at"])
+        emit_viewing_event(
+            actor=request.user,
+            viewing=viewing,
+            event_name="viewing.cancelled",
+            metadata={"notification_event": "ViewingCancelled"},
+        )
+        return Response(ViewingSerializer(viewing, context=self.get_serializer_context()).data)
+
+    @extend_schema(responses={200: ViewingSerializer})
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        viewing = self.get_object()
+        if not self._can_manage_viewing(request.user, viewing):
+            return Response(
+                {"detail": "Only the property owner can complete viewing requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            viewing.transition_to(ViewingStatus.COMPLETED)
+        except ValueError as exc:
+            return Response({"status": [str(exc)]}, status=status.HTTP_400_BAD_REQUEST)
+        emit_viewing_event(
+            actor=request.user,
+            viewing=viewing,
+            event_name="viewing.completed",
+            metadata={"notification_event": "ViewingCompleted"},
+        )
+        return Response(ViewingSerializer(viewing, context=self.get_serializer_context()).data)
+
+    @extend_schema(request=ViewingNotesSerializer, responses={200: ViewingSerializer})
+    @action(detail=True, methods=["patch"], url_path="notes")
+    def update_notes(self, request, pk=None):
+        viewing = self.get_object()
+        if not self._is_viewing_participant(request.user, viewing):
+            return Response(
+                {"detail": "Only viewing participants can update notes."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = ViewingNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        viewing.notes = serializer.validated_data["notes"]
+        viewing.save(update_fields=["notes", "updated_at"])
+        emit_viewing_event(
+            actor=request.user,
+            viewing=viewing,
+            event_name="viewing.updated",
+            metadata={"notification_event": "ViewingUpdated", "field": "notes"},
+        )
+        return Response(ViewingSerializer(viewing, context=self.get_serializer_context()).data)
+
+    def _apply_viewing_decision(
+        self,
+        *,
+        viewing: Viewing,
+        payload: dict,
+        next_status: str,
+        actor,
+        event_name: str,
+        notification_event: str,
+    ) -> None:
+        viewing.confirmed_datetime = payload["confirmed_datetime"]
+        viewing.meeting_location = payload.get("meeting_location", viewing.meeting_location)
+        viewing.meeting_link = payload.get("meeting_link", viewing.meeting_link)
+        viewing.notes = payload.get("notes", viewing.notes)
+        try:
+            viewing.transition_to(next_status)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        viewing.save(
+            update_fields=[
+                "confirmed_datetime",
+                "meeting_location",
+                "meeting_link",
+                "notes",
+                "updated_at",
+            ]
+        )
+        self._mark_inquiry_viewing_scheduled(viewing.inquiry)
+        emit_viewing_event(
+            actor=actor,
+            viewing=viewing,
+            event_name=event_name,
+            metadata={
+                "notification_event": notification_event,
+                "confirmed_datetime": viewing.confirmed_datetime.isoformat(),
+            },
+        )
+
+    def _mark_inquiry_viewing_scheduled(self, inquiry: Inquiry) -> None:
+        if inquiry.status == InquiryStatus.NEW:
+            inquiry.transition_to(InquiryStatus.CONTACTED)
+        if inquiry.status == InquiryStatus.CONTACTED:
+            inquiry.transition_to(InquiryStatus.VIEWING_SCHEDULED)
+
+    def _can_manage_viewing(self, user, viewing: Viewing) -> bool:
+        return user_is_admin(user) or viewing.property_owner_id == user.id
+
+    def _is_viewing_participant(self, user, viewing: Viewing) -> bool:
+        return (
+            user_is_admin(user)
+            or viewing.property_owner_id == user.id
+            or viewing.requester_id == user.id
+        )
+
+
 class DashboardSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -463,6 +700,14 @@ class DashboardSummaryView(APIView):
                 property__deleted_at__isnull=True,
             ).count(),
             "received_inquiries_count": Inquiry.objects.filter(
+                property_owner=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "my_viewings_count": Viewing.objects.filter(
+                requester=request.user,
+                property__deleted_at__isnull=True,
+            ).count(),
+            "received_viewings_count": Viewing.objects.filter(
                 property_owner=request.user,
                 property__deleted_at__isnull=True,
             ).count(),

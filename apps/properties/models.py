@@ -14,6 +14,8 @@ from apps.properties.choices import (
     ListingType,
     PropertyStatus,
     PropertyType,
+    ViewingStatus,
+    ViewingType,
 )
 
 
@@ -237,5 +239,82 @@ class Inquiry(BaseModel):
             return
         if not self.can_transition_to(next_status):
             raise ValueError(f"Inquiry cannot move from {self.status} to {next_status}.")
+        self.status = next_status
+        self.save(update_fields=["status", "updated_at"])
+
+
+class Viewing(BaseModel):
+    VALID_STATUS_TRANSITIONS = {
+        ViewingStatus.REQUESTED: {
+            ViewingStatus.CONFIRMED,
+            ViewingStatus.RESCHEDULED,
+            ViewingStatus.CANCELLED,
+        },
+        ViewingStatus.RESCHEDULED: {
+            ViewingStatus.CONFIRMED,
+            ViewingStatus.CANCELLED,
+        },
+        ViewingStatus.CONFIRMED: {
+            ViewingStatus.COMPLETED,
+            ViewingStatus.CANCELLED,
+        },
+        ViewingStatus.COMPLETED: set(),
+        ViewingStatus.CANCELLED: set(),
+    }
+
+    inquiry = models.ForeignKey(
+        Inquiry,
+        on_delete=models.PROTECT,
+        related_name="viewings",
+    )
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.PROTECT,
+        related_name="viewings",
+    )
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="viewing_requests",
+    )
+    property_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="received_viewing_requests",
+    )
+    viewing_type = models.CharField(max_length=20, choices=ViewingType.choices)
+    preferred_date = models.DateField()
+    preferred_time = models.TimeField()
+    confirmed_datetime = models.DateTimeField(null=True, blank=True)
+    meeting_location = models.CharField(max_length=240, blank=True)
+    meeting_link = models.URLField(blank=True)
+    notes = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=32,
+        choices=ViewingStatus.choices,
+        default=ViewingStatus.REQUESTED,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["requester", "status", "created_at"]),
+            models.Index(fields=["property_owner", "status", "created_at"]),
+            models.Index(fields=["property", "status"]),
+            models.Index(fields=["inquiry", "status"]),
+            models.Index(fields=["preferred_date", "preferred_time"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_viewing_type_display()} viewing for {self.property.title}"
+
+    def can_transition_to(self, next_status: str) -> bool:
+        return next_status in self.VALID_STATUS_TRANSITIONS.get(self.status, set())
+
+    def transition_to(self, next_status: str) -> None:
+        if next_status == self.status:
+            return
+        if not self.can_transition_to(next_status):
+            raise ValueError(f"Viewing cannot move from {self.status} to {next_status}.")
         self.status = next_status
         self.save(update_fields=["status", "updated_at"])

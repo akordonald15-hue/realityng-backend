@@ -45,3 +45,16 @@ class ContactPreference(models.TextChoices):
     EMAIL = "email", "Email"
     PHONE = "phone", "Phone"
     WHATSAPP = "whatsapp", "WhatsApp"
+
+
+class ViewingType(models.TextChoices):
+    PHYSICAL = "physical", "Physical"
+    VIRTUAL = "virtual", "Virtual"
+
+
+class ViewingStatus(models.TextChoices):
+    REQUESTED = "requested", "Requested"
+    RESCHEDULED = "rescheduled", "Rescheduled"
+    CONFIRMED = "confirmed", "Confirmed"
+    COMPLETED = "completed", "Completed"
+    CANCELLED = "cancelled", "Cancelled"

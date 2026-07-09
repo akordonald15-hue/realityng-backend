@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.properties.choices import (
@@ -10,7 +11,7 @@ from apps.properties.choices import (
     PropertyStatus,
     PropertyType,
 )
-from apps.properties.models import Favorite, Inquiry, Property, PropertyImage
+from apps.properties.models import Favorite, Inquiry, Property, PropertyImage, Viewing
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -352,6 +353,8 @@ class DashboardSummarySerializer(serializers.Serializer):
     draft_listings_count = serializers.IntegerField()
     my_inquiries_count = serializers.IntegerField(required=False)
     received_inquiries_count = serializers.IntegerField(required=False)
+    my_viewings_count = serializers.IntegerField(required=False)
+    received_viewings_count = serializers.IntegerField(required=False)
 
 
 class PropertyReviewDecisionSerializer(serializers.Serializer):
@@ -498,3 +501,115 @@ class InquiryStatusUpdateSerializer(serializers.Serializer):
 
 class InquiryNotesSerializer(serializers.Serializer):
     internal_notes = serializers.CharField(allow_blank=True, required=True)
+
+
+class ViewingSerializer(serializers.ModelSerializer):
+    inquiry_id = serializers.UUIDField(write_only=True)
+    inquiry = serializers.UUIDField(source="inquiry.id", read_only=True)
+    property = InquiryPropertySummarySerializer(read_only=True)
+    requester = serializers.SerializerMethodField()
+    property_owner = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Viewing
+        fields = [
+            "id",
+            "inquiry_id",
+            "inquiry",
+            "property",
+            "requester",
+            "property_owner",
+            "viewing_type",
+            "preferred_date",
+            "preferred_time",
+            "confirmed_datetime",
+            "meeting_location",
+            "meeting_link",
+            "notes",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "inquiry",
+            "property",
+            "requester",
+            "property_owner",
+            "confirmed_datetime",
+            "meeting_location",
+            "meeting_link",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_requester(self, obj: Viewing) -> dict:
+        return InquiryUserSerializer(obj.requester).data
+
+    def get_property_owner(self, obj: Viewing) -> dict:
+        return InquiryUserSerializer(obj.property_owner).data
+
+    def validate_inquiry_id(self, value):
+        try:
+            inquiry = Inquiry.objects.select_related("property", "property__owner").get(id=value)
+        except Inquiry.DoesNotExist as exc:
+            raise serializers.ValidationError("Inquiry is not available.") from exc
+
+        request = self.context["request"]
+        if inquiry.interested_user_id != request.user.id:
+            raise serializers.ValidationError(
+                "You can only request viewings for your own inquiries."
+            )
+        if inquiry.status == InquiryStatus.CLOSED:
+            raise serializers.ValidationError("Closed inquiries cannot receive viewing requests.")
+        if inquiry.property.deleted_at:
+            raise serializers.ValidationError("Property is not available for viewing requests.")
+
+        self.context["inquiry"] = inquiry
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        preferred_date = attrs.get("preferred_date")
+        preferred_time = attrs.get("preferred_time")
+        if preferred_date and preferred_date < timezone.localdate():
+            raise serializers.ValidationError(
+                {"preferred_date": "Preferred date cannot be in the past."}
+            )
+        if (
+            preferred_date
+            and preferred_time
+            and preferred_date == timezone.localdate()
+            and preferred_time <= timezone.localtime().time()
+        ):
+            raise serializers.ValidationError(
+                {"preferred_time": "Preferred time must be in the future."}
+            )
+        return attrs
+
+    def create(self, validated_data: dict) -> Viewing:
+        validated_data.pop("inquiry_id")
+        inquiry = self.context["inquiry"]
+        return Viewing.objects.create(
+            inquiry=inquiry,
+            property=inquiry.property,
+            requester=self.context["request"].user,
+            property_owner=inquiry.property_owner,
+            **validated_data,
+        )
+
+
+class ViewingDecisionSerializer(serializers.Serializer):
+    confirmed_datetime = serializers.DateTimeField(required=True)
+    meeting_location = serializers.CharField(required=False, allow_blank=True)
+    meeting_link = serializers.URLField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_confirmed_datetime(self, value):
+        if value <= timezone.now():
+            raise serializers.ValidationError("Confirmed viewing time must be in the future.")
+        return value
+
+
+class ViewingNotesSerializer(serializers.Serializer):
+    notes = serializers.CharField(allow_blank=True, required=True)
