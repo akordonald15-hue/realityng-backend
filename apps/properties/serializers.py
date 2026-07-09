@@ -369,6 +369,27 @@ class DashboardSummarySerializer(serializers.Serializer):
     received_applications_count = serializers.IntegerField(required=False)
 
 
+class DashboardActivityItemSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    action = serializers.CharField()
+    label = serializers.CharField()
+    entity_type = serializers.CharField()
+    entity_id = serializers.UUIDField()
+    property_id = serializers.CharField(allow_blank=True)
+    occurred_at = serializers.DateTimeField()
+
+
+class TransactionItemSerializer(serializers.Serializer):
+    property = serializers.DictField()
+    stage = serializers.CharField()
+    stage_label = serializers.CharField()
+    last_update = serializers.DateTimeField()
+    next_action = serializers.CharField()
+    inquiry_id = serializers.UUIDField(allow_null=True)
+    viewing_id = serializers.UUIDField(allow_null=True)
+    application_id = serializers.UUIDField(allow_null=True)
+
+
 class PropertyReviewDecisionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True)
 
@@ -724,6 +745,19 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
         inquiry_id = attrs.get("inquiry_id")
         viewing_id = attrs.get("viewing_id")
 
+        if RentalApplication.objects.filter(
+            property=prop,
+            applicant=request.user,
+            status__in=[
+                RentalApplicationStatus.SUBMITTED,
+                RentalApplicationStatus.UNDER_REVIEW,
+                RentalApplicationStatus.APPROVED,
+            ],
+        ).exists():
+            raise serializers.ValidationError(
+                "You already have an active application for this property."
+            )
+
         if inquiry_id:
             try:
                 inquiry = Inquiry.objects.get(id=inquiry_id)
@@ -753,6 +787,8 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
                     {"viewing_id": "Applications can only link confirmed or completed viewings."}
                 )
             self.context["viewing"] = viewing
+            if "inquiry" not in self.context:
+                self.context["inquiry"] = viewing.inquiry
 
         return attrs
 

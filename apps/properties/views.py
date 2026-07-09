@@ -11,6 +11,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.models import AuditLog
 from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
 from apps.properties.choices import (
@@ -30,9 +31,11 @@ from apps.properties.models import (
 )
 from apps.properties.permissions import IsOwnerOrAdmin
 from apps.properties.serializers import (
+    DashboardActivityItemSerializer,
     DashboardSummarySerializer,
     FavoriteSerializer,
     InquiryNotesSerializer,
+    InquiryPropertySummarySerializer,
     InquirySerializer,
     InquiryStatusUpdateSerializer,
     PropertyImageMetadataSerializer,
@@ -43,6 +46,7 @@ from apps.properties.serializers import (
     RentalApplicationNotesSerializer,
     RentalApplicationSerializer,
     RentalApplicationStatusUpdateSerializer,
+    TransactionItemSerializer,
     ViewingDecisionSerializer,
     ViewingNotesSerializer,
     ViewingSerializer,
@@ -893,6 +897,181 @@ class RentalApplicationViewSet(
 
     def _is_application_applicant(self, user, application: RentalApplication) -> bool:
         return application.applicant_id == user.id
+
+
+ACTIVITY_LABELS = {
+    "property_favorited": "Property saved",
+    "property_unfavorited": "Property removed from saved list",
+    "inquiry.created": "Inquiry submitted",
+    "inquiry.status_changed": "Inquiry status updated",
+    "inquiry.closed": "Inquiry closed",
+    "viewing.created": "Viewing requested",
+    "viewing.confirmed": "Viewing confirmed",
+    "viewing.rescheduled": "Viewing rescheduled",
+    "viewing.cancelled": "Viewing cancelled",
+    "viewing.completed": "Viewing completed",
+    "application.submitted": "Application submitted",
+    "application.under_review": "Application moved under review",
+    "application.approved": "Application approved",
+    "application.rejected": "Application rejected",
+    "application.withdrawn": "Application withdrawn",
+}
+
+
+class DashboardActivityView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: DashboardActivityItemSerializer(many=True)})
+    def get(self, request):
+        queryset = AuditLog.objects.select_related("actor")
+        if not user_is_admin(request.user):
+            user_id = str(request.user.id)
+            queryset = queryset.filter(
+                Q(actor=request.user)
+                | Q(metadata__property_owner_id=user_id)
+                | Q(metadata__interested_user_id=user_id)
+                | Q(metadata__requester_id=user_id)
+                | Q(metadata__applicant_id=user_id)
+            )
+        data = [
+            {
+                "id": item.id,
+                "action": item.action,
+                "label": ACTIVITY_LABELS.get(item.action, item.action.replace("_", " ").title()),
+                "entity_type": item.entity_type,
+                "entity_id": item.entity_id,
+                "property_id": item.metadata.get("property_id", ""),
+                "occurred_at": item.created_at,
+            }
+            for item in queryset.order_by("-created_at")[:25]
+        ]
+        return Response(DashboardActivityItemSerializer(data, many=True).data)
+
+
+class TransactionCenterView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: TransactionItemSerializer(many=True)})
+    def get(self, request):
+        user = request.user
+        inquiry_queryset = (
+            Inquiry.objects.select_related("property", "interested_user", "property_owner")
+            .prefetch_related("property__images", "viewings", "rental_applications")
+            .filter(property__deleted_at__isnull=True)
+        )
+        if not user_is_admin(user):
+            inquiry_queryset = inquiry_queryset.filter(
+                Q(interested_user=user) | Q(property_owner=user)
+            )
+
+        data = [
+            self._serialize_transaction(request, inquiry)
+            for inquiry in inquiry_queryset.order_by("-updated_at")[:25]
+        ]
+        return Response(TransactionItemSerializer(data, many=True).data)
+
+    def _serialize_transaction(self, request, inquiry: Inquiry) -> dict:
+        latest_viewing = max(
+            list(inquiry.viewings.all()),
+            key=lambda item: item.updated_at,
+            default=None,
+        )
+        latest_application = max(
+            list(inquiry.rental_applications.all()),
+            key=lambda item: item.updated_at,
+            default=None,
+        )
+        stage, stage_label, next_action, last_update = self._stage_for(
+            inquiry,
+            latest_viewing,
+            latest_application,
+        )
+        return {
+            "property": InquiryPropertySummarySerializer(
+                inquiry.property,
+                context={"request": request},
+            ).data,
+            "stage": stage,
+            "stage_label": stage_label,
+            "last_update": last_update,
+            "next_action": next_action,
+            "inquiry_id": inquiry.id,
+            "viewing_id": latest_viewing.id if latest_viewing else None,
+            "application_id": latest_application.id if latest_application else None,
+        }
+
+    def _stage_for(
+        self,
+        inquiry: Inquiry,
+        viewing: Viewing | None,
+        application: RentalApplication | None,
+    ) -> tuple[str, str, str, object]:
+        if application:
+            labels = {
+                RentalApplicationStatus.SUBMITTED: "Application Submitted",
+                RentalApplicationStatus.UNDER_REVIEW: "Application Under Review",
+                RentalApplicationStatus.APPROVED: "Application Approved",
+                RentalApplicationStatus.REJECTED: "Application Rejected",
+                RentalApplicationStatus.WITHDRAWN: "Application Withdrawn",
+            }
+            next_actions = {
+                RentalApplicationStatus.SUBMITTED: "Await owner review",
+                RentalApplicationStatus.UNDER_REVIEW: "Await owner decision",
+                RentalApplicationStatus.APPROVED: "Prepare verification and lease steps",
+                RentalApplicationStatus.REJECTED: "Review other properties",
+                RentalApplicationStatus.WITHDRAWN: "Apply again when ready",
+            }
+            return (
+                application.status,
+                labels[application.status],
+                next_actions[application.status],
+                application.updated_at,
+            )
+
+        if viewing:
+            labels = {
+                ViewingStatus.REQUESTED: "Viewing Requested",
+                ViewingStatus.RESCHEDULED: "Viewing Rescheduled",
+                ViewingStatus.CONFIRMED: "Viewing Confirmed",
+                ViewingStatus.COMPLETED: "Viewing Completed",
+                ViewingStatus.CANCELLED: "Viewing Cancelled",
+            }
+            next_actions = {
+                ViewingStatus.REQUESTED: "Await owner confirmation",
+                ViewingStatus.RESCHEDULED: "Confirm new viewing plan",
+                ViewingStatus.CONFIRMED: "Attend viewing",
+                ViewingStatus.COMPLETED: "Apply for property",
+                ViewingStatus.CANCELLED: "Request another viewing",
+            }
+            return (
+                viewing.status,
+                labels[viewing.status],
+                next_actions[viewing.status],
+                viewing.updated_at,
+            )
+
+        labels = {
+            InquiryStatus.NEW: "Inquiry Submitted",
+            InquiryStatus.CONTACTED: "Inquiry Contacted",
+            InquiryStatus.VIEWING_SCHEDULED: "Viewing Scheduled",
+            InquiryStatus.NEGOTIATING: "Negotiating",
+            InquiryStatus.CONVERTED: "Converted",
+            InquiryStatus.CLOSED: "Closed",
+        }
+        next_actions = {
+            InquiryStatus.NEW: "Request viewing",
+            InquiryStatus.CONTACTED: "Request viewing",
+            InquiryStatus.VIEWING_SCHEDULED: "Review viewing details",
+            InquiryStatus.NEGOTIATING: "Continue owner follow-up",
+            InquiryStatus.CONVERTED: "Transaction converted",
+            InquiryStatus.CLOSED: "Browse other properties",
+        }
+        return (
+            inquiry.status,
+            labels[inquiry.status],
+            next_actions[inquiry.status],
+            inquiry.updated_at,
+        )
 
 
 class DashboardSummaryView(APIView):
