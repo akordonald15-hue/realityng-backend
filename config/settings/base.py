@@ -102,6 +102,21 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": env("DRF_THROTTLE_ANON_RATE", default="100/hour"),
+        "user": env("DRF_THROTTLE_USER_RATE", default="1000/hour"),
+        "auth_login": env("DRF_THROTTLE_AUTH_LOGIN_RATE", default="10/minute"),
+        "auth_register": env("DRF_THROTTLE_AUTH_REGISTER_RATE", default="5/minute"),
+        "auth_password_reset": env("DRF_THROTTLE_PASSWORD_RESET_RATE", default="5/minute"),
+        "inquiry_create": env("DRF_THROTTLE_INQUIRY_CREATE_RATE", default="20/hour"),
+        "viewing_create": env("DRF_THROTTLE_VIEWING_CREATE_RATE", default="20/hour"),
+        "application_create": env("DRF_THROTTLE_APPLICATION_CREATE_RATE", default="10/hour"),
+        "property_upload": env("DRF_THROTTLE_PROPERTY_UPLOAD_RATE", default="30/hour"),
+    },
 }
 
 AUTH_USER_MODEL = "accounts.User"
@@ -149,6 +164,10 @@ PROPERTY_IMAGE_MAX_SIZE_MB = env.int("PROPERTY_IMAGE_MAX_SIZE_MB", default=10)
 PROPERTY_IMAGE_ALLOWED_TYPES = env.list(
     "PROPERTY_IMAGE_ALLOWED_TYPES",
     default=["image/jpeg", "image/png", "image/webp"],
+)
+PROPERTY_IMAGE_ALLOWED_EXTENSIONS = env.list(
+    "PROPERTY_IMAGE_ALLOWED_EXTENSIONS",
+    default=[".jpg", ".jpeg", ".png", ".webp"],
 )
 
 TEMPLATES = [

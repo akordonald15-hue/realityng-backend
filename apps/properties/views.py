@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import AuditLog
@@ -54,10 +55,21 @@ from apps.properties.serializers import (
 from apps.properties.services import emit_application_event, emit_inquiry_event, emit_viewing_event
 
 
-class PropertyViewSet(viewsets.ModelViewSet):
+class ActionScopedThrottleMixin:
+    throttle_scope_by_action: dict[str, str] = {}
+    throttle_classes = [AnonRateThrottle, UserRateThrottle, ScopedRateThrottle]
+
+    def get_throttles(self):
+        if getattr(self, "action", None) in self.throttle_scope_by_action:
+            self.throttle_scope = self.throttle_scope_by_action[self.action]
+        return super().get_throttles()
+
+
+class PropertyViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
     queryset = Property.objects.none()
     serializer_class = PropertySerializer
     permission_classes = [IsAuthenticated, IsOwnerOrAdmin]
+    throttle_scope_by_action = {"images": "property_upload"}
     lookup_field = "slug"
     search_fields = ["title"]
     ordering_fields = ["created_at", "price", "title", "status"]
@@ -345,6 +357,7 @@ class FavoriteViewSet(
 
 
 class InquiryViewSet(
+    ActionScopedThrottleMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -353,6 +366,7 @@ class InquiryViewSet(
     queryset = Inquiry.objects.none()
     serializer_class = InquirySerializer
     permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {"create": "inquiry_create"}
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -463,6 +477,7 @@ class InquiryViewSet(
 
 
 class ViewingViewSet(
+    ActionScopedThrottleMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -471,6 +486,7 @@ class ViewingViewSet(
     queryset = Viewing.objects.none()
     serializer_class = ViewingSerializer
     permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {"create": "viewing_create"}
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -697,6 +713,7 @@ class ViewingViewSet(
 
 
 class RentalApplicationViewSet(
+    ActionScopedThrottleMixin,
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
@@ -705,6 +722,7 @@ class RentalApplicationViewSet(
     queryset = RentalApplication.objects.none()
     serializer_class = RentalApplicationSerializer
     permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {"create": "application_create"}
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):

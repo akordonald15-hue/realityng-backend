@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from django.conf import settings
 from django.utils import timezone
+from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
 from apps.accounts.services import user_is_admin
@@ -83,11 +86,26 @@ class PropertyImageSerializer(serializers.ModelSerializer):
             allowed = ", ".join(sorted(allowed_types))
             raise serializers.ValidationError(f"Image must be one of: {allowed}.")
 
+        allowed_extensions = {
+            extension.lower() for extension in settings.PROPERTY_IMAGE_ALLOWED_EXTENSIONS
+        }
+        extension = Path(value.name).suffix.lower()
+        if extension not in allowed_extensions:
+            allowed = ", ".join(sorted(allowed_extensions))
+            raise serializers.ValidationError(f"Image extension must be one of: {allowed}.")
+
         max_size = settings.PROPERTY_IMAGE_MAX_SIZE_MB * 1024 * 1024
         if value.size > max_size:
             raise serializers.ValidationError(
                 f"Image must be {settings.PROPERTY_IMAGE_MAX_SIZE_MB}MB or smaller."
             )
+        try:
+            image = Image.open(value)
+            image.verify()
+        except (UnidentifiedImageError, OSError) as exc:
+            raise serializers.ValidationError("Uploaded file must be a valid image.") from exc
+        finally:
+            value.seek(0)
         return value
 
     def validate(self, attrs: dict) -> dict:

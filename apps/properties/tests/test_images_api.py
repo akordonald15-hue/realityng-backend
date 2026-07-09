@@ -186,6 +186,56 @@ def test_upload_rejects_invalid_image_type(
 
 
 @pytest.mark.django_db
+def test_upload_rejects_disallowed_image_extension(
+    api_client,
+    settings,
+    tmp_path,
+    user,
+    property_listing,
+    test_image_file,
+):
+    settings.MEDIA_ROOT = tmp_path
+    api_client.force_authenticate(user)
+
+    response = api_client.post(
+        reverse("properties-images", args=[property_listing.slug]),
+        {"image": test_image_file("property.gif")},
+        format="multipart",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "image" in response.data
+    assert "extension" in str(response.data["image"]).lower()
+
+
+@pytest.mark.django_db
+def test_upload_rejects_invalid_image_content(
+    api_client,
+    settings,
+    tmp_path,
+    user,
+    property_listing,
+):
+    settings.MEDIA_ROOT = tmp_path
+    api_client.force_authenticate(user)
+
+    response = api_client.post(
+        reverse("properties-images", args=[property_listing.slug]),
+        {
+            "image": SimpleUploadedFile(
+                "property.jpg",
+                b"not a real image",
+                content_type="image/jpeg",
+            )
+        },
+        format="multipart",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "image" in response.data
+
+
+@pytest.mark.django_db
 def test_upload_rejects_large_images(
     api_client,
     settings,

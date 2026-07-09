@@ -8,6 +8,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -33,6 +34,8 @@ from apps.accounts.services import decide_role_request
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_register"
 
     @extend_schema(request=RegisterSerializer, responses={201: UserSerializer})
     def post(self, request):
@@ -47,6 +50,8 @@ class RegisterView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
 
     @extend_schema(request=LoginSerializer, responses={200: LoginSerializer})
     def post(self, request):
@@ -75,6 +80,8 @@ class RefreshTokenView(TokenRefreshView):
 
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_password_reset"
 
     @extend_schema(
         request=ForgotPasswordSerializer,
@@ -95,6 +102,8 @@ class ForgotPasswordView(APIView):
 
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_password_reset"
 
     @extend_schema(
         request=ResetPasswordSerializer,

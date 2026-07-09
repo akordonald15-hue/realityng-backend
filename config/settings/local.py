@@ -12,3 +12,10 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":  # noqa: F405
+    CACHES = {  # noqa: F405
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "realityng-local",
+        }
+    }
