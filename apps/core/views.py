@@ -9,6 +9,7 @@ from apps.core.serializers import HealthSerializer
 class HealthCheckView(APIView):
     authentication_classes: list = []
     permission_classes: list = []
+    throttle_classes: list = []
 
     @extend_schema(responses={200: HealthSerializer})
     def get(self, request):
