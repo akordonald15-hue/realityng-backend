@@ -1,0 +1,59 @@
+services:
+  backend:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: production.txt
+    env_file:
+      - .env.production
+    environment: !reset []
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 1
+      --threads 2
+      --timeout 120
+      --access-logfile -
+      --error-logfile -
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:18000:8000"
+    volumes: !reset []
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 512m
+
+  postgres:
+    env_file:
+      - .env.production
+    environment: !reset []
+    restart: unless-stopped
+    ports: !reset []
+    volumes:
+      - realityng_postgres_data:/var/lib/postgresql/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+    volumes:
+      - realityng_redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 96mb --maxmemory-policy allkeys-lru
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  realityng_postgres_data:
+  realityng_redis_data:

@@ -11,12 +11,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements/ ./requirements/
+ARG REQUIREMENTS_FILE=local.txt
 RUN pip install --upgrade pip \
-    && pip install -r requirements/local.txt
+    && pip install -r "requirements/${REQUIREMENTS_FILE}"
 
 COPY . .
 
 EXPOSE 8000
 
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-
