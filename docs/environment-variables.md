@@ -10,6 +10,9 @@
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,backend` | Hosts Django will serve. |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Frontend origins allowed to call the API. |
 | `CSRF_TRUSTED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Trusted origins for cookie-authenticated unsafe requests. |
+| `SECURE_SSL_REDIRECT` | `false` | Redirects HTTP to HTTPS when enabled. Keep `false` for HTTP-only development environments. |
+| `SESSION_COOKIE_SECURE` | `false` | Sends session cookies over HTTPS only when enabled. Keep `false` for HTTP-only development environments. |
+| `CSRF_COOKIE_SECURE` | `false` | Sends CSRF cookies over HTTPS only when enabled. Keep `false` for HTTP-only development environments. |
 | `DATABASE_URL` | `postgres://realityng:realityng@postgres:5432/realityng` | PostgreSQL connection string. |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis cache URL. |
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery broker URL. |
@@ -37,7 +40,9 @@
 
 | Variable | Purpose |
 | --- | --- |
-| `SECURE_SSL_REDIRECT` | Forces HTTPS in production. |
+| `SECURE_SSL_REDIRECT` | Forces HTTPS in production. Set to `true` after HTTPS is active. |
+| `SESSION_COOKIE_SECURE` | Restricts session cookies to HTTPS. Set to `true` after HTTPS is active. |
+| `CSRF_COOKIE_SECURE` | Restricts CSRF cookies to HTTPS. Set to `true` after HTTPS is active. |
 | `SECURE_HSTS_SECONDS` | HSTS duration in production. |
 | `EMAIL_HOST` | SMTP host. |
 | `EMAIL_PORT` | SMTP port. |
