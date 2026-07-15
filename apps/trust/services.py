@@ -105,3 +105,35 @@ def decide_property_verification_request(
         metadata={"property_id": str(property_verification.property_id)},
     )
     return property_verification
+
+
+MATERIAL_PROPERTY_FIELDS = {"address", "price", "listing_type"}
+
+
+def handle_property_edit(property_obj, changed_fields: set, actor) -> None:
+    """Apply the material-edit invalidation rule to an approved verification.
+
+    Cosmetic edits (description wording, bedroom count, etc.) leave an
+    approved PropertyVerification untouched. Material edits -- address,
+    price, or listing type -- move it back to under_review, since the
+    verified evidence may no longer describe the current listing.
+
+    No-op if there is no approved verification for this property.
+    """
+    verification = property_obj.verifications.filter(status="approved").first()
+    if not verification:
+        return
+    if not (changed_fields & MATERIAL_PROPERTY_FIELDS):
+        return
+
+    before_status = verification.status
+    verification.transition_to("under_review")
+    create_audit_log(
+        actor=actor,
+        action="property_verification.reverted_to_review",
+        entity=verification,
+        metadata={
+            "previous_status": before_status,
+            "changed_fields": sorted(changed_fields & MATERIAL_PROPERTY_FIELDS),
+        },
+    )
