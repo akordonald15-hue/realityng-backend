@@ -107,7 +107,10 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
         related_name="documents",
     )
     document_type = models.CharField(max_length=64)
-    file = models.FileField(upload_to="verification/%Y/%m/")
+    file = models.FileField(
+        upload_to="verification/%Y/%m/",
+        storage="verification",
+    )
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=100)
     file_size = models.PositiveIntegerField()
