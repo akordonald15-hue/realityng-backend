@@ -1,27 +1,39 @@
-"""API views for user and property verification workflows."""
+"""API views for user, property, and admin verification workflows."""
 
 from __future__ import annotations
 
-from rest_framework import status, viewsets
+from django.shortcuts import get_object_or_404
+from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log
 from apps.trust.models import PropertyVerification, VerificationRequest
 from apps.trust.permissions import IsPropertyVerificationSubmitter, IsVerificationRequestOwner
 from apps.trust.serializers import (
+    AdminPropertyVerificationSerializer,
+    AdminVerificationRequestSerializer,
     PropertyVerificationSerializer,
+    VerificationDecisionSerializer,
     VerificationDocumentSerializer,
     VerificationRequestSerializer,
 )
+from apps.trust.services import decide_property_verification_request, decide_verification_request
+
+
+# ---------------------------------------------------------------------------
+# Self-service (user-facing)
+# ---------------------------------------------------------------------------
 
 
 class VerificationRequestViewSet(viewsets.ModelViewSet):
     """Self-service verification requests: submit, view, upload documents, resubmit.
 
-    Users may only ever see and act on their own requests -- there is no
-    list-all-users endpoint here by design, that lives in the admin view.
+    Users may only ever see and act on their own requests -- listing all
+    users' requests lives in the admin views below, not here.
     """
 
     serializer_class = VerificationRequestSerializer
@@ -121,3 +133,131 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
         return Response(
             PropertyVerificationSerializer(property_verification, context={"request": request}).data,
         )
+
+
+# ---------------------------------------------------------------------------
+# Admin (review queue)
+# ---------------------------------------------------------------------------
+
+
+class AdminVerificationListView(generics.ListAPIView):
+    """Admin queue listing, filterable by verification_type and status."""
+
+    serializer_class = AdminVerificationRequestSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+    filterset_fields = ["verification_type", "status"]
+    queryset = VerificationRequest.objects.select_related("user", "reviewer").order_by("-created_at")
+
+
+class AdminVerificationDetailView(generics.RetrieveAPIView):
+    serializer_class = AdminVerificationRequestSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+    queryset = VerificationRequest.objects.select_related("user", "reviewer")
+
+
+class BaseVerificationDecisionView(APIView):
+    """Shared body for every admin verification decision action.
+
+    Subclasses set target_status; decide_verification_request() handles
+    self-review blocking, transition validation, and audit logging.
+    Not duplicated per action, unlike the accounts app's role-decision
+    views, since the logic here is identical across five decision types.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+    target_status: str = ""
+
+    def post(self, request, pk):
+        verification_request = get_object_or_404(VerificationRequest, pk=pk)
+        serializer = VerificationDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            decided = decide_verification_request(
+                actor=request.user,
+                verification_request=verification_request,
+                status=self.target_status,
+                **serializer.validated_data,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            AdminVerificationRequestSerializer(decided, context={"request": request}).data
+        )
+
+
+class AdminVerificationApproveView(BaseVerificationDecisionView):
+    target_status = "approved"
+
+
+class AdminVerificationRejectView(BaseVerificationDecisionView):
+    target_status = "rejected"
+
+
+class AdminVerificationRequestInfoView(BaseVerificationDecisionView):
+    target_status = "needs_more_information"
+
+
+class AdminVerificationSuspendView(BaseVerificationDecisionView):
+    target_status = "suspended"
+
+
+class AdminVerificationExpireView(BaseVerificationDecisionView):
+    target_status = "expired"
+
+
+class AdminPropertyVerificationListView(generics.ListAPIView):
+    serializer_class = AdminPropertyVerificationSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+    filterset_fields = ["status"]
+    queryset = PropertyVerification.objects.select_related(
+        "property", "submitted_by", "reviewer"
+    ).order_by("-created_at")
+
+
+class AdminPropertyVerificationDetailView(generics.RetrieveAPIView):
+    serializer_class = AdminPropertyVerificationSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+    queryset = PropertyVerification.objects.select_related("property", "submitted_by", "reviewer")
+
+
+class BasePropertyVerificationDecisionView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    target_status: str = ""
+
+    def post(self, request, pk):
+        property_verification = get_object_or_404(PropertyVerification, pk=pk)
+        serializer = VerificationDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            decided = decide_property_verification_request(
+                actor=request.user,
+                property_verification=property_verification,
+                status=self.target_status,
+                rejection_reason=serializer.validated_data.get("rejection_reason", ""),
+                expiry_date=serializer.validated_data.get("expiry_date"),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            AdminPropertyVerificationSerializer(decided, context={"request": request}).data
+        )
+
+
+class AdminPropertyVerificationApproveView(BasePropertyVerificationDecisionView):
+    target_status = "approved"
+
+
+class AdminPropertyVerificationRejectView(BasePropertyVerificationDecisionView):
+    target_status = "rejected"
+
+
+class AdminPropertyVerificationRequestInfoView(BasePropertyVerificationDecisionView):
+    target_status = "needs_more_information"
+
+
+class AdminPropertyVerificationSuspendView(BasePropertyVerificationDecisionView):
+    target_status = "suspended"
+
+
+class AdminPropertyVerificationExpireView(BasePropertyVerificationDecisionView):
+    target_status = "expired"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from apps.trust.choices import VerificationStatus
 from apps.trust.models import PropertyVerification, VerificationDocument, VerificationRequest
 from apps.trust.validators import (
     compute_checksum,
@@ -53,6 +54,8 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
 
 
 class VerificationRequestSerializer(serializers.ModelSerializer):
+    """Self-service view: excludes review_notes, an admin-internal field."""
+
     documents = VerificationDocumentSerializer(many=True, read_only=True)
 
     class Meta:
@@ -90,12 +93,28 @@ class VerificationRequestSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        # review_notes is intentionally excluded: internal-only, never
-        # serialized to the submitting user, only visible via admin views.
 
     def create(self, validated_data: dict) -> VerificationRequest:
         validated_data["user"] = self.context["request"].user
         return super().create(validated_data)
+
+
+class AdminVerificationRequestSerializer(serializers.ModelSerializer):
+    """Admin view: full fields including internal review_notes."""
+
+    documents = VerificationDocumentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = VerificationRequest
+        fields = "__all__"
+
+
+class VerificationDecisionSerializer(serializers.Serializer):
+    """Input payload for admin approve/reject/suspend/expire/request-info actions."""
+
+    rejection_reason = serializers.CharField(required=False, allow_blank=True, default="")
+    review_notes = serializers.CharField(required=False, allow_blank=True, default="")
+    expiry_date = serializers.DateField(required=False, allow_null=True, default=None)
 
 
 class PropertyVerificationSerializer(serializers.ModelSerializer):
@@ -128,9 +147,15 @@ class PropertyVerificationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        # verified_snapshot is intentionally excluded: internal bookkeeping
-        # for the material-edit invalidation rule, not user-facing.
 
     def create(self, validated_data: dict) -> PropertyVerification:
         validated_data["submitted_by"] = self.context["request"].user
         return super().create(validated_data)
+
+
+class AdminPropertyVerificationSerializer(serializers.ModelSerializer):
+    """Admin view: full fields including verified_snapshot."""
+
+    class Meta:
+        model = PropertyVerification
+        fields = "__all__"
