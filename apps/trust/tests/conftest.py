@@ -116,3 +116,10 @@ def disallowed_extension_file():
         b"MZ\x90\x00\x03\x00\x00\x00",
         content_type="application/x-msdownload",
     )
+
+
+@pytest.fixture
+def api_client():
+    from rest_framework.test import APIClient
+
+    return APIClient()

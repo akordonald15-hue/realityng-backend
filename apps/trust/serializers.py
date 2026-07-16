@@ -30,6 +30,7 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
         )
         read_only_fields = (
             "id",
+            "verification_request",
             "original_filename",
             "mime_type",
             "file_size",

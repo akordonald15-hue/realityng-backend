@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
@@ -42,6 +43,15 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return VerificationRequest.objects.filter(user=self.request.user).select_related("reviewer")
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            return Response(
+                {"detail": "You already have an active verification request of this type."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     def perform_create(self, serializer) -> None:
         verification_request = serializer.save(status="pending")

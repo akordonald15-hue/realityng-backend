@@ -5,6 +5,7 @@ from django.db import models
 
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
 from apps.properties.models import Property
+from apps.trust.storage import get_verification_storage
 from apps.trust.choices import (
     ACTIVE_VERIFICATION_STATUSES,
     VerificationStatus,
@@ -109,7 +110,7 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
     document_type = models.CharField(max_length=64)
     file = models.FileField(
         upload_to="verification/%Y/%m/",
-        storage="verification",
+        storage=get_verification_storage,
     )
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=100)
@@ -135,7 +136,36 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
 
 
 class PropertyVerification(BaseModel):
-    VALID_STATUS_TRANSITIONS = VerificationRequest.VALID_STATUS_TRANSITIONS
+    # Separate from VerificationRequest's table: property verification
+    # allows approved -> under_review, since a material property edit
+    # (address/price/listing_type change) must be able to pull an
+    # approved verification back for re-review. That path should not
+    # be available for user verifications (agent/landlord/artisan),
+    # where suspend is the only way back from approved.
+    VALID_STATUS_TRANSITIONS = {
+        VerificationStatus.NOT_SUBMITTED: {VerificationStatus.PENDING},
+        VerificationStatus.PENDING: {
+            VerificationStatus.UNDER_REVIEW,
+            VerificationStatus.REJECTED,
+        },
+        VerificationStatus.UNDER_REVIEW: {
+            VerificationStatus.APPROVED,
+            VerificationStatus.REJECTED,
+            VerificationStatus.NEEDS_MORE_INFO,
+        },
+        VerificationStatus.NEEDS_MORE_INFO: {
+            VerificationStatus.UNDER_REVIEW,
+            VerificationStatus.PENDING,
+        },
+        VerificationStatus.REJECTED: {VerificationStatus.PENDING},
+        VerificationStatus.APPROVED: {
+            VerificationStatus.SUSPENDED,
+            VerificationStatus.EXPIRED,
+            VerificationStatus.UNDER_REVIEW,
+        },
+        VerificationStatus.SUSPENDED: {VerificationStatus.UNDER_REVIEW},
+        VerificationStatus.EXPIRED: {VerificationStatus.PENDING},
+    }
 
     property = models.ForeignKey(
         Property,
