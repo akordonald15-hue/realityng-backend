@@ -105,6 +105,15 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
     verification_request = models.ForeignKey(
         VerificationRequest,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="documents",
+    )
+    property_verification = models.ForeignKey(
+        "PropertyVerification",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="documents",
     )
     document_type = models.CharField(max_length=64)
@@ -129,6 +138,15 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
         indexes = [
             models.Index(fields=["verification_request", "document_type"]),
             models.Index(fields=["checksum"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(verification_request__isnull=False, property_verification__isnull=True)
+                    | models.Q(verification_request__isnull=True, property_verification__isnull=False)
+                ),
+                name="document_has_exactly_one_parent",
+            )
         ]
 
     def __str__(self) -> str:

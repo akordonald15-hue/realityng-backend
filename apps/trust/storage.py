@@ -27,7 +27,7 @@ class PrivateVerificationDocumentStorage(S3Boto3Storage):
     """
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("bucket_name", settings.MINIO_PRIVATE_BUCKET_NAME)
+        kwargs.setdefault("bucket_name", settings.MINIO_BUCKET_NAME)
         kwargs.setdefault("default_acl", "private")
         kwargs.setdefault("file_overwrite", False)
         kwargs.setdefault("querystring_auth", True)

@@ -150,6 +150,29 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
 # ---------------------------------------------------------------------------
 
 
+    @action(detail=True, methods=["post"], url_path="documents")
+    def documents(self, request, pk=None):
+        property_verification = self.get_object()
+        serializer = VerificationDocumentSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        document = serializer.save(property_verification=property_verification)
+        create_audit_log(
+            actor=request.user,
+            action="property_verification_document_uploaded",
+            entity=property_verification,
+            metadata={
+                "document_type": document.document_type,
+                "document_id": str(document.id),
+            },
+        )
+        return Response(
+            VerificationDocumentSerializer(document, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
 class AdminVerificationListView(generics.ListAPIView):
     """Admin queue listing, filterable by verification_type and status."""
 
