@@ -19,10 +19,16 @@ class AIProviderError(Exception):
 
 @dataclass
 class ProviderMessage:
-    """A single message in a conversation, in provider-agnostic form."""
+    """A single message in a conversation, in provider-agnostic form.
+
+    raw_content, when set, carries provider-native content blocks (e.g.
+    Anthropic tool_use / tool_result blocks) needed to reconstruct a
+    multi-turn tool exchange. When unset, `content` (plain text) is used.
+    """
 
     role: str  # "user" | "assistant" | "system" | "tool"
-    content: str
+    content: str = ""
+    raw_content: list[dict] | None = None
     tool_calls: list[dict] = field(default_factory=list)
     tool_results: list[dict] = field(default_factory=list)
 
@@ -34,6 +40,7 @@ class ProviderResponse:
     content: str
     role: str = "assistant"
     tool_calls: list[dict] = field(default_factory=list)
+    content_blocks: list[dict] = field(default_factory=list)
     stop_reason: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -103,11 +110,12 @@ class AnthropicProvider(AIProvider):
 
         import anthropic
 
-        api_messages = [
-            {"role": m.role, "content": m.content}
-            for m in messages
-            if m.role in ("user", "assistant")
-        ]
+        api_messages = []
+        for m in messages:
+            if m.role not in ("user", "assistant"):
+                continue
+            content = m.raw_content if m.raw_content is not None else m.content
+            api_messages.append({"role": m.role, "content": content})
 
         kwargs: dict = {
             "model": self.model,
@@ -126,16 +134,23 @@ class AnthropicProvider(AIProvider):
         except anthropic.APIError as exc:
             raise AIProviderError(f"Anthropic API call failed: {exc}") from exc
 
-        text_parts = [block.text for block in response.content if block.type == "text"]
-        tool_calls = [
-            {"id": block.id, "name": block.name, "input": block.input}
-            for block in response.content
-            if block.type == "tool_use"
-        ]
+        text_parts = []
+        tool_calls = []
+        content_blocks = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+                content_blocks.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+                content_blocks.append(
+                    {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+                )
 
         return ProviderResponse(
             content="".join(text_parts),
             tool_calls=tool_calls,
+            content_blocks=content_blocks,
             stop_reason=response.stop_reason,
             input_tokens=response.usage.input_tokens if response.usage else None,
             output_tokens=response.usage.output_tokens if response.usage else None,

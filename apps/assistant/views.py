@@ -1,3 +1,4 @@
+import json
 import logging
 
 from django.core.cache import cache
@@ -20,6 +21,7 @@ from apps.assistant.serializers import (
     AISearchQuerySerializer,
     SendMessageSerializer,
 )
+from apps.assistant.tools import TOOL_DEFINITIONS, execute_tool
 from apps.properties.choices import PropertyStatus
 from apps.properties.filters import PublicPropertyFilter
 from apps.properties.models import Property
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 SESSION_CACHE_TTL_SECONDS = 30 * 60
 SESSION_CACHE_MAX_MESSAGES = 20
 AI_SEARCH_RESULT_LIMIT = 20
+MAX_TOOL_ROUNDS = 2
 
 
 def _session_cache_key(conversation_id) -> str:
@@ -85,8 +88,10 @@ class AIConversationViewSet(
             content=user_content,
         )
 
-        history = self._get_session_history(conversation)
-        history.append(ProviderMessage(role="user", content=user_content))
+        plain_history = self._get_session_history(conversation)
+        provider_messages = list(plain_history) + [
+            ProviderMessage(role="user", content=user_content)
+        ]
 
         provider = get_provider(conversation.provider)
         if not provider.is_configured():
@@ -97,8 +102,58 @@ class AIConversationViewSet(
             )
             return _unavailable_response()
 
+        all_tool_calls = []
+        tool_results_payload = []
+
         try:
-            provider_response = provider.send_message(history)
+            response = provider.send_message(
+                provider_messages, tools=TOOL_DEFINITIONS, max_tokens=1024
+            )
+            rounds = 0
+            while response.tool_calls and rounds < MAX_TOOL_ROUNDS:
+                rounds += 1
+                provider_messages.append(
+                    ProviderMessage(
+                        role="assistant",
+                        content=response.content,
+                        raw_content=response.content_blocks,
+                    )
+                )
+
+                tool_result_blocks = []
+                for call in response.tool_calls:
+                    all_tool_calls.append(call)
+                    try:
+                        result = execute_tool(call["name"], call["input"])
+                    except Exception:
+                        logger.exception(
+                            "Tool execution failed: %s for conversation %s",
+                            call["name"],
+                            conversation.id,
+                        )
+                        result = {"error": "tool_execution_failed"}
+                    tool_results_payload.append(
+                        {
+                            "tool_use_id": call["id"],
+                            "tool": call["name"],
+                            "input": call["input"],
+                            "result": result,
+                        }
+                    )
+                    tool_result_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": json.dumps(result, default=str),
+                        }
+                    )
+
+                provider_messages.append(
+                    ProviderMessage(role="user", content="", raw_content=tool_result_blocks)
+                )
+                response = provider.send_message(
+                    provider_messages, tools=TOOL_DEFINITIONS, max_tokens=1024
+                )
         except AIProviderError:
             logger.exception("AI provider call failed for conversation %s", conversation.id)
             return _unavailable_response()
@@ -106,13 +161,17 @@ class AIConversationViewSet(
         assistant_message = AIMessage.objects.create(
             conversation=conversation,
             role=AIMessage.Role.ASSISTANT,
-            content=provider_response.content,
-            tool_calls=provider_response.tool_calls,
-            token_count=provider_response.output_tokens,
+            content=response.content,
+            tool_calls=all_tool_calls,
+            tool_results=tool_results_payload,
+            token_count=response.output_tokens,
         )
 
-        history.append(ProviderMessage(role="assistant", content=provider_response.content))
-        self._set_session_history(conversation, history)
+        new_plain_history = plain_history + [
+            ProviderMessage(role="user", content=user_content),
+            ProviderMessage(role="assistant", content=response.content),
+        ]
+        self._set_session_history(conversation, new_plain_history)
 
         return Response(
             {
