@@ -118,6 +118,7 @@ REST_FRAMEWORK = {
         "viewing_create": env("DRF_THROTTLE_VIEWING_CREATE_RATE", default="20/hour"),
         "application_create": env("DRF_THROTTLE_APPLICATION_CREATE_RATE", default="10/hour"),
         "property_upload": env("DRF_THROTTLE_PROPERTY_UPLOAD_RATE", default="30/hour"),
+        "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
 
