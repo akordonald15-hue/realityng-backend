@@ -41,3 +41,7 @@ class AIConversationDetailSerializer(AIConversationSerializer):
 
 class SendMessageSerializer(serializers.Serializer):
     content = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=8000)
+
+
+class AISearchQuerySerializer(serializers.Serializer):
+    query = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=500)

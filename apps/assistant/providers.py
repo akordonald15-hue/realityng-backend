@@ -52,6 +52,7 @@ class AIProvider(abc.ABC):
         *,
         system: str | None = None,
         tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
         max_tokens: int = 1024,
     ) -> ProviderResponse:
         """Send a conversation to the provider and return its response.
@@ -94,6 +95,7 @@ class AnthropicProvider(AIProvider):
         *,
         system: str | None = None,
         tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
         max_tokens: int = 1024,
     ) -> ProviderResponse:
         if not self.is_configured():
@@ -116,6 +118,8 @@ class AnthropicProvider(AIProvider):
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
 
         try:
             response = self.client.messages.create(**kwargs)
