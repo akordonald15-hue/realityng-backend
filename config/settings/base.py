@@ -30,6 +30,7 @@ if env_file.exists():
     environ.Env.read_env(env_file)
 
 SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development-secret-key")
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 ROOT_URLCONF = "config.urls"
@@ -61,6 +62,7 @@ LOCAL_APPS = [
     "apps.core",
     "apps.accounts",
     "apps.properties",
+    "apps.assistant",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
