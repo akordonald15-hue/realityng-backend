@@ -2,7 +2,7 @@ import json
 import logging
 
 from django.core.cache import cache
-from django.db.models import Count
+from django.db.models import Count, F
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 
 from apps.assistant.models import AIConversation, AIMessage
 from apps.assistant.nl_parser import parse_query_to_filters
+from apps.assistant.prompts import CONVERSATION_SYSTEM_PROMPT
 from apps.assistant.providers import AIProviderError, ProviderMessage, get_provider
 from apps.assistant.serializers import (
     AIConversationDetailSerializer,
@@ -104,12 +105,20 @@ class AIConversationViewSet(
 
         all_tool_calls = []
         tool_results_payload = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        rounds = 0
 
         try:
             response = provider.send_message(
-                provider_messages, tools=TOOL_DEFINITIONS, max_tokens=1024
+                provider_messages,
+                system=CONVERSATION_SYSTEM_PROMPT,
+                tools=TOOL_DEFINITIONS,
+                max_tokens=1024,
             )
-            rounds = 0
+            total_input_tokens += response.input_tokens or 0
+            total_output_tokens += response.output_tokens or 0
+
             while response.tool_calls and rounds < MAX_TOOL_ROUNDS:
                 rounds += 1
                 provider_messages.append(
@@ -152,8 +161,13 @@ class AIConversationViewSet(
                     ProviderMessage(role="user", content="", raw_content=tool_result_blocks)
                 )
                 response = provider.send_message(
-                    provider_messages, tools=TOOL_DEFINITIONS, max_tokens=1024
+                    provider_messages,
+                    system=CONVERSATION_SYSTEM_PROMPT,
+                    tools=TOOL_DEFINITIONS,
+                    max_tokens=1024,
                 )
+                total_input_tokens += response.input_tokens or 0
+                total_output_tokens += response.output_tokens or 0
         except AIProviderError:
             logger.exception("AI provider call failed for conversation %s", conversation.id)
             return _unavailable_response()
@@ -164,7 +178,24 @@ class AIConversationViewSet(
             content=response.content,
             tool_calls=all_tool_calls,
             tool_results=tool_results_payload,
-            token_count=response.output_tokens,
+            token_count=total_output_tokens or None,
+        )
+
+        AIConversation.objects.filter(pk=conversation.pk).update(
+            total_input_tokens=F("total_input_tokens") + total_input_tokens,
+            total_output_tokens=F("total_output_tokens") + total_output_tokens,
+        )
+
+        logger.info(
+            "ai_assistant_usage",
+            extra={
+                "conversation_id": str(conversation.id),
+                "provider": conversation.provider,
+                "tool_rounds": rounds,
+                "tool_call_count": len(all_tool_calls),
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+            },
         )
 
         new_plain_history = plain_history + [

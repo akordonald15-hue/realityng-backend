@@ -33,6 +33,8 @@ class AIConversation(BaseModel):
     )
     title = models.CharField(max_length=255, blank=True, default="")
     metadata = models.JSONField(default=dict, blank=True)
+    total_input_tokens = models.PositiveIntegerField(default=0)
+    total_output_tokens = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["-created_at"]
