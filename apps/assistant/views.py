@@ -62,10 +62,10 @@ class AIConversationViewSet(
     throttle_scope_by_action = {"send_message": "ai_assistant_message"}
 
     def get_queryset(self):
-        return (
-            AIConversation.objects.filter(user=self.request.user)
-            .prefetch_related("messages")
-        )
+        queryset = AIConversation.objects.filter(user=self.request.user)
+        if self.action == "retrieve":
+            return queryset.prefetch_related("messages")
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "retrieve":
