@@ -12,7 +12,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.assistant.models import AIConversation, AIMessage
-from apps.assistant.nl_parser import parse_query_to_filters
+from apps.assistant.nl_parser import NLParseUnavailable, parse_query_to_filters
 from apps.assistant.prompts import CONVERSATION_SYSTEM_PROMPT
 from apps.assistant.providers import AIProviderError, ProviderMessage, get_provider
 from apps.assistant.serializers import (
@@ -226,7 +226,11 @@ class AIConversationViewSet(
         self._set_session_history(conversation, history)
         return history
 
-    def _set_session_history(self, conversation: AIConversation, history: list[ProviderMessage]) -> None:
+    def _set_session_history(
+        self,
+        conversation: AIConversation,
+        history: list[ProviderMessage],
+    ) -> None:
         trimmed = history[-SESSION_CACHE_MAX_MESSAGES:]
         payload = [{"role": m.role, "content": m.content} for m in trimmed]
         cache.set(_session_cache_key(conversation.id), payload, timeout=SESSION_CACHE_TTL_SECONDS)
@@ -251,7 +255,11 @@ class AISearchView(APIView):
         input_serializer.is_valid(raise_exception=True)
         query = input_serializer.validated_data["query"]
 
-        extracted_filters = parse_query_to_filters(query)
+        try:
+            extracted_filters = parse_query_to_filters(query, fail_closed=True)
+        except NLParseUnavailable:
+            logger.warning("AI search parser unavailable")
+            return _unavailable_response()
 
         base_queryset = (
             Property.objects.filter(status=PropertyStatus.APPROVED)

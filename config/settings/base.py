@@ -31,6 +31,7 @@ if env_file.exists():
 
 SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development-secret-key")
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
+ANTHROPIC_MODEL = env("ANTHROPIC_MODEL", default="claude-sonnet-5")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 ROOT_URLCONF = "config.urls"

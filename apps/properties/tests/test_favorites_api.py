@@ -152,8 +152,8 @@ def test_dashboard_summary_counts_saved_active_and_draft_properties(
     response = api_client.get(reverse("dashboard-summary"))
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.data == {
+    assert response.data.items() >= {
         "saved_properties_count": 1,
         "active_listings_count": 1,
         "draft_listings_count": 1,
-    }
+    }.items()

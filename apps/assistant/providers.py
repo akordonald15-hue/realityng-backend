@@ -78,11 +78,11 @@ class AnthropicProvider(AIProvider):
     """AIProvider implementation backed by the Anthropic Claude API."""
 
     name = "anthropic"
-    default_model = "claude-sonnet-4-6"
+    default_model = "claude-sonnet-5"
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         self.api_key = api_key or settings.ANTHROPIC_API_KEY
-        self.model = model or self.default_model
+        self.model = model or getattr(settings, "ANTHROPIC_MODEL", self.default_model)
         self._client = None
 
     def is_configured(self) -> bool:

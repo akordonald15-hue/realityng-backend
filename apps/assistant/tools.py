@@ -9,6 +9,9 @@ requests.
 
 from __future__ import annotations
 
+from rest_framework import serializers
+
+from apps.assistant.nl_parser import PropertySearchFilterSerializer
 from apps.properties.choices import ListingType, PropertyStatus, PropertyType
 from apps.properties.filters import PublicPropertyFilter
 from apps.properties.models import Property
@@ -19,6 +22,25 @@ TOOL_RESULT_LIMIT = 10
 
 class UnknownToolError(Exception):
     """Raised when the model calls a tool name we don't recognize."""
+
+
+class InvalidToolInputError(Exception):
+    """Raised when a recognized tool receives invalid model-provided input."""
+
+
+class ComparePropertiesInputSerializer(serializers.Serializer):
+    property_ids = serializers.ListField(
+        child=serializers.UUIDField(format="hex_verbose"),
+        min_length=2,
+        max_length=4,
+    )
+
+
+class NavigateInputSerializer(serializers.Serializer):
+    target = serializers.ChoiceField(
+        choices=["property_detail", "application", "inquiry", "search_results"]
+    )
+    property_id = serializers.UUIDField(format="hex_verbose", required=False)
 
 
 SEARCH_PROPERTIES_TOOL = {
@@ -89,6 +111,13 @@ NAVIGATE_TOOL = {
 TOOL_DEFINITIONS = [SEARCH_PROPERTIES_TOOL, COMPARE_PROPERTIES_TOOL, NAVIGATE_TOOL]
 
 
+def _validated(serializer_class: type[serializers.Serializer], tool_input: dict) -> dict:
+    serializer = serializer_class(data=tool_input or {})
+    if not serializer.is_valid():
+        raise InvalidToolInputError(serializer.errors)
+    return dict(serializer.validated_data)
+
+
 def _base_queryset():
     return (
         Property.objects.filter(status=PropertyStatus.APPROVED)
@@ -98,6 +127,7 @@ def _base_queryset():
 
 
 def _execute_search_properties(tool_input: dict) -> dict:
+    tool_input = _validated(PropertySearchFilterSerializer, tool_input)
     base_queryset = _base_queryset()
     queryset = PublicPropertyFilter(tool_input, queryset=base_queryset).qs
     results = queryset[:TOOL_RESULT_LIMIT]
@@ -108,7 +138,8 @@ def _execute_search_properties(tool_input: dict) -> dict:
 
 
 def _execute_compare_properties(tool_input: dict) -> dict:
-    property_ids = tool_input.get("property_ids") or []
+    tool_input = _validated(ComparePropertiesInputSerializer, tool_input)
+    property_ids = [str(property_id) for property_id in tool_input.get("property_ids", [])]
     properties = list(_base_queryset().filter(id__in=property_ids))
     found_ids = {str(p.id) for p in properties}
     missing = [pid for pid in property_ids if pid not in found_ids]
@@ -119,8 +150,9 @@ def _execute_compare_properties(tool_input: dict) -> dict:
 
 
 def _execute_navigate(tool_input: dict) -> dict:
+    tool_input = _validated(NavigateInputSerializer, tool_input)
     target = tool_input.get("target")
-    property_id = tool_input.get("property_id")
+    property_id = str(tool_input["property_id"]) if tool_input.get("property_id") else None
 
     path_map = {
         "search_results": "/properties",

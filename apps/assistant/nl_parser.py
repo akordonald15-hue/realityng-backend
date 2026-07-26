@@ -61,12 +61,26 @@ class NLParseError(Exception):
     """Raised when the query cannot be parsed into valid filters."""
 
 
+class NLParseUnavailable(Exception):
+    """Raised when the AI parser provider is unavailable."""
+
+
 class PropertySearchFilterSerializer(serializers.Serializer):
     city = serializers.CharField(max_length=100, required=False, allow_blank=False)
     property_type = serializers.ChoiceField(choices=PropertyType.choices, required=False)
     listing_type = serializers.ChoiceField(choices=ListingType.choices, required=False)
-    min_price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0"), required=False)
-    max_price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0"), required=False)
+    min_price = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        required=False,
+    )
+    max_price = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        required=False,
+    )
     min_bedrooms = serializers.IntegerField(min_value=0, required=False)
     min_bathrooms = serializers.IntegerField(min_value=0, required=False)
 
@@ -79,13 +93,17 @@ class PropertySearchFilterSerializer(serializers.Serializer):
         return attrs
 
 
-def parse_query_to_filters(query: str, provider: AIProvider | None = None) -> dict:
+def parse_query_to_filters(
+    query: str,
+    provider: AIProvider | None = None,
+    *,
+    fail_closed: bool = False,
+) -> dict:
     """Parse a free-text search query into a dict of validated property filters.
 
-    Returns an empty dict (never raises) if the provider is unavailable or
-    extraction fails outright — callers should treat that as "no filters
-    could be confidently extracted" and fall back to an unfiltered or
-    standard-search experience rather than surfacing an error to the user.
+    Returns an empty dict if extraction is malformed. If fail_closed is
+    true, provider outages raise NLParseUnavailable so API entry points can
+    return a clear 503 instead of showing unrelated unfiltered listings.
     """
     query = (query or "").strip()
     if not query:
@@ -93,6 +111,8 @@ def parse_query_to_filters(query: str, provider: AIProvider | None = None) -> di
 
     provider = provider or get_provider("anthropic")
     if not provider.is_configured():
+        if fail_closed:
+            raise NLParseUnavailable("AI provider is not configured.")
         return {}
 
     messages = [ProviderMessage(role="user", content=query)]
@@ -105,7 +125,9 @@ def parse_query_to_filters(query: str, provider: AIProvider | None = None) -> di
             tool_choice={"type": "tool", "name": EXTRACT_FILTERS_TOOL_NAME},
             max_tokens=512,
         )
-    except AIProviderError:
+    except AIProviderError as exc:
+        if fail_closed:
+            raise NLParseUnavailable("AI provider failed while parsing query.") from exc
         return {}
 
     tool_call = next(
