@@ -5,12 +5,12 @@ from django.db import models
 
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
 from apps.properties.models import Property
-from apps.trust.storage import get_verification_storage
 from apps.trust.choices import (
     ACTIVE_VERIFICATION_STATUSES,
     VerificationStatus,
     VerificationType,
 )
+from apps.trust.storage import get_verification_storage
 
 
 class VerificationRequest(BaseModel):
@@ -87,7 +87,10 @@ class VerificationRequest(BaseModel):
         ]
 
     def __str__(self) -> str:
-        return f"{self.get_verification_type_display()} verification for {self.user_id} ({self.status})"
+        return (
+            f"{self.get_verification_type_display()} verification "
+            f"for {self.user_id} ({self.status})"
+        )
 
     def can_transition_to(self, next_status: str) -> bool:
         return next_status in self.VALID_STATUS_TRANSITIONS.get(self.status, set())
@@ -141,9 +144,15 @@ class VerificationDocument(UUIDPrimaryKeyMixin):
         ]
         constraints = [
             models.CheckConstraint(
-                check=(
-                    models.Q(verification_request__isnull=False, property_verification__isnull=True)
-                    | models.Q(verification_request__isnull=True, property_verification__isnull=False)
+                condition=(
+                    models.Q(
+                        verification_request__isnull=False,
+                        property_verification__isnull=True,
+                    )
+                    | models.Q(
+                        verification_request__isnull=True,
+                        property_verification__isnull=False,
+                    )
                 ),
                 name="document_has_exactly_one_parent",
             )
@@ -247,6 +256,8 @@ class PropertyVerification(BaseModel):
         if next_status == self.status:
             return
         if not self.can_transition_to(next_status):
-            raise ValueError(f"Property verification cannot move from {self.status} to {next_status}.")
+            raise ValueError(
+                f"Property verification cannot move from {self.status} to {next_status}."
+            )
         self.status = next_status
         self.save(update_fields=["status", "updated_at"])

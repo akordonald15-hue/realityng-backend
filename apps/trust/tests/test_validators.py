@@ -58,4 +58,7 @@ class TestSanitizeOriginalFilename:
         assert sanitize_original_filename("***") == "document"
 
     def test_preserves_safe_filename(self):
-        assert sanitize_original_filename("CAC Certificate - 2026.pdf") == "CAC Certificate - 2026.pdf"
+        assert (
+            sanitize_original_filename("CAC Certificate - 2026.pdf")
+            == "CAC Certificate - 2026.pdf"
+        )

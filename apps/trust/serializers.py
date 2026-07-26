@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework import serializers
 
-from apps.trust.choices import VerificationStatus
 from apps.trust.models import PropertyVerification, VerificationDocument, VerificationRequest
 from apps.trust.validators import (
     compute_checksum,
@@ -97,6 +97,7 @@ class VerificationRequestSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data: dict) -> VerificationRequest:
         validated_data["user"] = self.context["request"].user
+        validated_data["submitted_at"] = timezone.now()
         return super().create(validated_data)
 
 
@@ -149,8 +150,20 @@ class PropertyVerificationSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def validate_property(self, value):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication is required.")
+        if not (user.is_staff or value.owner_id == user.id):
+            raise serializers.ValidationError(
+                "Only the property owner or an admin can submit property verification."
+            )
+        return value
+
     def create(self, validated_data: dict) -> PropertyVerification:
         validated_data["submitted_by"] = self.context["request"].user
+        validated_data["submitted_at"] = timezone.now()
         return super().create(validated_data)
 
 

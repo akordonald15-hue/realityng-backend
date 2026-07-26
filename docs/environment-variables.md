@@ -22,6 +22,7 @@
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key. |
 | `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key. |
 | `MINIO_BUCKET_NAME` | `realityng-local` | Local object storage bucket name. |
+| `VERIFICATION_DOCUMENT_BUCKET_NAME` | `realityng-verification-private` | Private bucket for sensitive verification evidence. Do not make this bucket public. |
 | `USE_S3_MEDIA_STORAGE` | `true` | Enables S3-compatible media storage. Docker local development sets this to `true`; direct local tests can leave it `false`. |
 
 ## Optional Variables
@@ -35,6 +36,9 @@
 | `PROPERTY_IMAGE_MAX_COUNT` | `30` | Maximum number of uploaded images per property. |
 | `PROPERTY_IMAGE_MAX_SIZE_MB` | `10` | Maximum uploaded image size in megabytes. |
 | `PROPERTY_IMAGE_ALLOWED_TYPES` | `image/jpeg,image/png,image/webp` | Comma-separated allowed image MIME types. |
+| `VERIFICATION_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum uploaded verification document size in megabytes. |
+| `VERIFICATION_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed verification document MIME types. |
+| `VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed verification document extensions. |
 
 ## Production Variables
 

@@ -182,6 +182,10 @@ VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS = env.list(
     "VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS",
     default=[".pdf", ".jpg", ".jpeg", ".png"],
 )
+VERIFICATION_DOCUMENT_BUCKET_NAME = env(
+    "VERIFICATION_DOCUMENT_BUCKET_NAME",
+    default="realityng-verification-private",
+)
 
 TEMPLATES = [
     {

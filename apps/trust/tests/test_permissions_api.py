@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from rest_framework import status
 
-from apps.trust.models import VerificationRequest
+from apps.trust.models import PropertyVerification, VerificationRequest
 
 pytestmark = pytest.mark.django_db
 
@@ -23,7 +23,9 @@ class TestVerificationRequestOwnership:
         response = api_client.get(f"/api/v1/verifications/{verification_request.id}/")
         assert response.status_code in (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND)
 
-    def test_unauthenticated_user_cannot_access_verifications(self, api_client, verification_request):
+    def test_unauthenticated_user_cannot_access_verifications(
+        self, api_client, verification_request
+    ):
         response = api_client.get(f"/api/v1/verifications/{verification_request.id}/")
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
@@ -58,8 +60,41 @@ class TestVerificationSubmission:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
+class TestPropertyVerificationSubmission:
+    def test_owner_can_submit_property_verification(self, api_client, user, property_listing):
+        api_client.force_authenticate(user=user)
+        response = api_client.post(
+            "/api/v1/property-verifications/",
+            {"property": str(property_listing.id)},
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert PropertyVerification.objects.filter(
+            property=property_listing,
+            submitted_by=user,
+            status="pending",
+        ).exists()
+
+    def test_non_owner_cannot_submit_property_verification(
+        self, api_client, other_user, property_listing
+    ):
+        api_client.force_authenticate(user=other_user)
+        response = api_client.post(
+            "/api/v1/property-verifications/",
+            {"property": str(property_listing.id)},
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert not PropertyVerification.objects.filter(
+            property=property_listing,
+            submitted_by=other_user,
+        ).exists()
+
+
 class TestVerificationDocumentUpload:
-    def test_owner_can_upload_document(self, api_client, user, verification_request, valid_pdf_file):
+    def test_owner_can_upload_document(
+        self, api_client, user, verification_request, valid_pdf_file
+    ):
         api_client.force_authenticate(user=user)
         response = api_client.post(
             f"/api/v1/verifications/{verification_request.id}/documents/",
@@ -79,7 +114,9 @@ class TestVerificationDocumentUpload:
         )
         assert response.status_code in (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND)
 
-    def test_forged_file_upload_rejected(self, api_client, user, verification_request, invalid_pdf_file):
+    def test_forged_file_upload_rejected(
+        self, api_client, user, verification_request, invalid_pdf_file
+    ):
         api_client.force_authenticate(user=user)
         response = api_client.post(
             f"/api/v1/verifications/{verification_request.id}/documents/",

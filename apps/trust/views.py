@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -23,7 +24,6 @@ from apps.trust.serializers import (
     VerificationRequestSerializer,
 )
 from apps.trust.services import decide_property_verification_request, decide_verification_request
-
 
 # ---------------------------------------------------------------------------
 # Self-service (user-facing)
@@ -92,6 +92,8 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
             )
         before_status = verification_request.status
         verification_request.transition_to("pending")
+        verification_request.submitted_at = timezone.now()
+        verification_request.save(update_fields=["submitted_at", "updated_at"])
         create_audit_log(
             actor=request.user,
             action="verification_resubmitted",
@@ -134,6 +136,8 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
             )
         before_status = property_verification.status
         property_verification.transition_to("pending")
+        property_verification.submitted_at = timezone.now()
+        property_verification.save(update_fields=["submitted_at", "updated_at"])
         create_audit_log(
             actor=request.user,
             action="property_verification_resubmitted",
@@ -141,14 +145,11 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
             metadata={"previous_status": before_status},
         )
         return Response(
-            PropertyVerificationSerializer(property_verification, context={"request": request}).data,
+            PropertyVerificationSerializer(
+                property_verification,
+                context={"request": request},
+            ).data,
         )
-
-
-# ---------------------------------------------------------------------------
-# Admin (review queue)
-# ---------------------------------------------------------------------------
-
 
     @action(detail=True, methods=["post"], url_path="documents")
     def documents(self, request, pk=None):
@@ -173,13 +174,21 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+
+# ---------------------------------------------------------------------------
+# Admin (review queue)
+# ---------------------------------------------------------------------------
+
+
 class AdminVerificationListView(generics.ListAPIView):
     """Admin queue listing, filterable by verification_type and status."""
 
     serializer_class = AdminVerificationRequestSerializer
     permission_classes = [IsAuthenticated, IsAdmin]
     filterset_fields = ["verification_type", "status"]
-    queryset = VerificationRequest.objects.select_related("user", "reviewer").order_by("-created_at")
+    queryset = VerificationRequest.objects.select_related("user", "reviewer").order_by(
+        "-created_at"
+    )
 
 
 class AdminVerificationDetailView(generics.RetrieveAPIView):
