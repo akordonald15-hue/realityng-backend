@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from rest_framework import status
 
+from apps.trust.serializers import build_verification_document_url
 from apps.trust.services import decide_verification_request
 from apps.trust.storage import PrivateVerificationDocumentStorage
 
@@ -138,3 +139,18 @@ def test_private_document_storage_uses_configured_signed_url_expiry(settings):
     storage = PrivateVerificationDocumentStorage()
 
     assert storage.querystring_expire == 17
+
+
+def test_verification_document_url_uses_public_minio_endpoint(settings):
+    settings.MINIO_ENDPOINT = "http://minio:9000"
+    settings.MINIO_PUBLIC_ENDPOINT = "https://api.realityng.com/object-storage"
+
+    class FileFieldStub:
+        url = "http://minio:9000/realityng-verification-private/doc.pdf?signature=abc"
+
+        def __bool__(self):
+            return True
+
+    assert build_verification_document_url(FileFieldStub()).startswith(
+        "https://api.realityng.com/object-storage/realityng-verification-private/doc.pdf"
+    )

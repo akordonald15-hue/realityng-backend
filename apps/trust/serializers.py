@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
@@ -12,6 +13,19 @@ from apps.trust.validators import (
     sanitize_original_filename,
     validate_verification_document,
 )
+
+
+def build_verification_document_url(file_field, request=None) -> str:
+    if not file_field:
+        return ""
+    url = file_field.url
+    internal_endpoint = getattr(settings, "MINIO_ENDPOINT", "").rstrip("/")
+    public_endpoint = getattr(settings, "MINIO_PUBLIC_ENDPOINT", internal_endpoint).rstrip("/")
+    if internal_endpoint and public_endpoint and url.startswith(internal_endpoint):
+        url = f"{public_endpoint}{url[len(internal_endpoint) :]}"
+    if request and url.startswith("/"):
+        return request.build_absolute_uri(url)
+    return url
 
 
 class VerificationDocumentSerializer(serializers.ModelSerializer):
@@ -44,6 +58,14 @@ class VerificationDocumentSerializer(serializers.ModelSerializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message) from exc
         return value
+
+    def to_representation(self, instance: VerificationDocument) -> dict:
+        data = super().to_representation(instance)
+        data["file"] = build_verification_document_url(
+            instance.file,
+            self.context.get("request"),
+        )
+        return data
 
     def create(self, validated_data: dict) -> VerificationDocument:
         file_obj = validated_data["file"]
