@@ -70,8 +70,11 @@ services:
     ports: !reset []
     volumes:
       - realityng_minio_data:/data
-    networks:
-      - realityng-backend
+    networks: !override
+      realityng-backend: {}
+      shared-proxy:
+        aliases:
+          - realityng-minio
     mem_limit: 256m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
