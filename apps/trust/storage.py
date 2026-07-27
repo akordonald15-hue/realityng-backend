@@ -31,7 +31,7 @@ class PrivateVerificationDocumentStorage(S3Boto3Storage):
         kwargs.setdefault("default_acl", "private")
         kwargs.setdefault("file_overwrite", False)
         kwargs.setdefault("querystring_auth", True)
-        kwargs.setdefault("querystring_expire", 300)
+        kwargs.setdefault("querystring_expire", settings.VERIFICATION_SIGNED_URL_EXPIRY)
         kwargs.setdefault("custom_domain", False)
         super().__init__(*args, **kwargs)
 

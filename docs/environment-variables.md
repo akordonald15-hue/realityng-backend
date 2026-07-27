@@ -41,6 +41,7 @@
 | `VERIFICATION_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum uploaded verification document size in megabytes. |
 | `VERIFICATION_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed verification document MIME types. |
 | `VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed verification document extensions. |
+| `VERIFICATION_SIGNED_URL_EXPIRY` | `300` | Signed verification document URL lifetime in seconds. |
 | `DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE` | `20/hour` | Scoped rate limit for assistant messages and AI search. |
 
 ## Production Variables

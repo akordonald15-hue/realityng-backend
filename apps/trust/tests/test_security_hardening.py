@@ -11,6 +11,7 @@ import pytest
 from rest_framework import status
 
 from apps.trust.services import decide_verification_request
+from apps.trust.storage import PrivateVerificationDocumentStorage
 
 pytestmark = pytest.mark.django_db
 
@@ -129,3 +130,11 @@ class TestPropertyEditInvalidation:
 
         property_verification.refresh_from_db()
         assert property_verification.status == "under_review"
+
+
+def test_private_document_storage_uses_configured_signed_url_expiry(settings):
+    settings.VERIFICATION_SIGNED_URL_EXPIRY = 17
+
+    storage = PrivateVerificationDocumentStorage()
+
+    assert storage.querystring_expire == 17
