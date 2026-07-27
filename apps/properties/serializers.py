@@ -266,10 +266,22 @@ class PropertySerializer(serializers.ModelSerializer):
     def update(self, instance: Property, validated_data: dict) -> Property:
         if instance.status == PropertyStatus.APPROVED:
             instance.status = PropertyStatus.DRAFT
+        changed_fields = {
+            field
+            for field in PROPERTY_MUTABLE_FIELDS
+            if field in validated_data and getattr(instance, field) != validated_data[field]
+        }
         for field in PROPERTY_MUTABLE_FIELDS:
             if field in validated_data:
                 setattr(instance, field, validated_data[field])
         instance.save()
+
+        from apps.trust.services import handle_property_edit
+
+        actor = self.context["request"].user if "request" in self.context else None
+        if actor is not None:
+            handle_property_edit(instance, changed_fields, actor)
+
         return instance
 
 
