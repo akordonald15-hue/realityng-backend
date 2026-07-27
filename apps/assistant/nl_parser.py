@@ -14,7 +14,14 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from apps.assistant.providers import AIProvider, AIProviderError, ProviderMessage, get_provider
+from apps.assistant.demo import extract_demo_search_filters
+from apps.assistant.providers import (
+    AIProvider,
+    AIProviderError,
+    ProviderMessage,
+    get_active_provider_mode,
+    get_provider,
+)
 from apps.properties.choices import ListingType, PropertyType
 
 EXTRACT_FILTERS_TOOL_NAME = "extract_property_search_filters"
@@ -109,7 +116,14 @@ def parse_query_to_filters(
     if not query:
         return {}
 
-    provider = provider or get_provider("anthropic")
+    provider_mode = get_active_provider_mode()
+    if provider is None and provider_mode == "demo":
+        serializer = PropertySearchFilterSerializer(data=extract_demo_search_filters(query))
+        if serializer.is_valid():
+            return {k: v for k, v in serializer.validated_data.items()}
+        return {}
+
+    provider = provider or get_provider(provider_mode)
     if not provider.is_configured():
         if fail_closed:
             raise NLParseUnavailable("AI provider is not configured.")

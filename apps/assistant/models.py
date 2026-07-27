@@ -13,6 +13,8 @@ class AIConversation(BaseModel):
         ARCHIVED = "archived", "Archived"
 
     class Provider(models.TextChoices):
+        DISABLED = "disabled", "Disabled"
+        DEMO = "demo", "Demo"
         ANTHROPIC = "anthropic", "Anthropic"
 
     user = models.ForeignKey(

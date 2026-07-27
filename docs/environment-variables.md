@@ -6,7 +6,9 @@
 | --- | --- | --- |
 | `DJANGO_SETTINGS_MODULE` | `config.settings.local` | Selects Django settings module. |
 | `SECRET_KEY` | `change-me` | Django signing secret. Use a strong private value outside local development. |
-| `ANTHROPIC_API_KEY` | empty locally | Enables the AI assistant when populated. Keep this value server-side only. |
+| `AI_ASSISTANT_ENABLED` | `true` | Enables assistant endpoints. Set to `false` to return the standard assistant-unavailable response. |
+| `AI_PROVIDER_MODE` | `demo` | Selects the backend assistant provider mode: `disabled`, `demo`, or `anthropic`. Frontend clients must not decide this. |
+| `ANTHROPIC_API_KEY` | empty locally | Enables live Anthropic mode when `AI_PROVIDER_MODE=anthropic`. Keep this value server-side only. |
 | `ANTHROPIC_MODEL` | `claude-sonnet-5` | Anthropic model ID used by the assistant provider. |
 | `DEBUG` | `true` | Enables local debug behavior. Must be `false` in production. |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,backend` | Hosts Django will serve. |

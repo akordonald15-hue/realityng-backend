@@ -32,6 +32,8 @@ if env_file.exists():
 SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development-secret-key")
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
 ANTHROPIC_MODEL = env("ANTHROPIC_MODEL", default="claude-sonnet-5")
+AI_ASSISTANT_ENABLED = env.bool("AI_ASSISTANT_ENABLED", default=True)
+AI_PROVIDER_MODE = env("AI_PROVIDER_MODE", default="anthropic").strip().lower()
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 ROOT_URLCONF = "config.urls"
@@ -146,6 +148,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "ENUM_NAME_OVERRIDES": {
         "AIConversationStatusEnum": "apps.assistant.models.AIConversation.Status",
+        "AIConversationProviderEnum": "apps.assistant.models.AIConversation.Provider",
         "InquiryStatusEnum": "apps.properties.choices.InquiryStatus",
         "RentalApplicationStatusEnum": "apps.properties.choices.RentalApplicationStatus",
         "RoleEnum": "apps.accounts.choices.RoleName",

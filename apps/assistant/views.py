@@ -12,15 +12,22 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.assistant.demo import DEMO_SUGGESTED_PROMPTS, SUPPORTED_DEMO_TOPICS
 from apps.assistant.models import AIConversation, AIMessage
 from apps.assistant.nl_parser import NLParseUnavailable, parse_query_to_filters
 from apps.assistant.prompts import CONVERSATION_SYSTEM_PROMPT
-from apps.assistant.providers import AIProviderError, ProviderMessage, get_provider
+from apps.assistant.providers import (
+    AIProviderError,
+    ProviderMessage,
+    get_active_provider_mode,
+    get_provider,
+)
 from apps.assistant.serializers import (
     AIConversationDetailSerializer,
     AIConversationSerializer,
     AIMessageSerializer,
     AISearchQuerySerializer,
+    AssistantConfigSerializer,
     SendMessageSerializer,
 )
 from apps.assistant.tools import TOOL_DEFINITIONS, execute_tool
@@ -75,8 +82,21 @@ class AIConversationViewSet(
             return AIConversationDetailSerializer
         return AIConversationSerializer
 
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except AIProviderError:
+            return _unavailable_response()
+
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user, status=AIConversation.Status.ACTIVE)
+        provider_mode = get_active_provider_mode()
+        if provider_mode == AIConversation.Provider.DISABLED:
+            raise AIProviderError("AI assistant is disabled.")
+        serializer.save(
+            user=self.request.user,
+            status=AIConversation.Status.ACTIVE,
+            provider=provider_mode,
+        )
 
     @action(detail=True, methods=["post"], url_path="messages")
     def send_message(self, request, pk=None):
@@ -175,6 +195,9 @@ class AIConversationViewSet(
             logger.exception("AI provider call failed for conversation %s", conversation.id)
             return _unavailable_response()
 
+        if conversation.provider == AIConversation.Provider.DEMO and response.raw:
+            tool_results_payload = response.raw.get("tool_results", [])
+
         assistant_message = AIMessage.objects.create(
             conversation=conversation,
             role=AIMessage.Role.ASSISTANT,
@@ -211,6 +234,10 @@ class AIConversationViewSet(
             {
                 "user_message": AIMessageSerializer(user_message).data,
                 "assistant_message": AIMessageSerializer(assistant_message).data,
+                "provider_metadata": {
+                    "provider": conversation.provider,
+                    "mode": conversation.provider,
+                },
             },
             status=status.HTTP_201_CREATED,
         )
@@ -286,8 +313,45 @@ class AISearchView(APIView):
                 "query": query,
                 "extracted_filters": extracted_filters,
                 "result_count": filtered_queryset.count(),
+                "provider_metadata": {
+                    "provider": get_active_provider_mode(),
+                    "mode": get_active_provider_mode(),
+                },
                 "results": PublicPropertySerializer(
                     results, many=True, context={"request": request}
                 ).data,
             }
         )
+
+
+class AssistantConfigView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = AssistantConfigSerializer
+
+    @extend_schema(responses={200: AssistantConfigSerializer})
+    def get(self, request):
+        provider_mode = get_active_provider_mode()
+        payload = {
+            "enabled": provider_mode != AIConversation.Provider.DISABLED,
+            "provider_mode": provider_mode,
+            "label": (
+                "RealityNG Demo Assistant"
+                if provider_mode == AIConversation.Provider.DEMO
+                else "RealityNG Assistant"
+            ),
+            "supported_topics": SUPPORTED_DEMO_TOPICS
+            if provider_mode == AIConversation.Provider.DEMO
+            else [
+                "Property discovery",
+                "Property comparison",
+                "RealityNG workflow guidance",
+            ],
+            "suggested_prompts": DEMO_SUGGESTED_PROMPTS
+            if provider_mode == AIConversation.Provider.DEMO
+            else [
+                "2-bedroom apartments in Lekki",
+                "Compare properties I've saved",
+                "How do I schedule a viewing?",
+            ],
+        }
+        return Response(AssistantConfigSerializer(payload).data)

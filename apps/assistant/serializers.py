@@ -45,3 +45,11 @@ class SendMessageSerializer(serializers.Serializer):
 
 class AISearchQuerySerializer(serializers.Serializer):
     query = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=500)
+
+
+class AssistantConfigSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    provider_mode = serializers.ChoiceField(choices=["disabled", "demo", "anthropic"])
+    label = serializers.CharField()
+    supported_topics = serializers.ListField(child=serializers.CharField())
+    suggested_prompts = serializers.ListField(child=serializers.CharField())

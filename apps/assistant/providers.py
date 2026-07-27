@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
+from apps.assistant.demo import build_demo_response
+
 
 class AIProviderError(Exception):
     """Raised when a provider call fails or is misconfigured."""
@@ -158,9 +160,76 @@ class AnthropicProvider(AIProvider):
         )
 
 
+class DemoProvider(AIProvider):
+    name = "demo"
+
+    def send_message(
+        self,
+        messages: list[ProviderMessage],
+        *,
+        system: str | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
+        max_tokens: int = 1024,
+    ) -> ProviderResponse:
+        user_message = next((m.content for m in reversed(messages) if m.role == "user"), "")
+        result = build_demo_response(user_message)
+        tool_results = []
+        if result.navigation:
+            tool_results.append(
+                {
+                    "tool_use_id": "demo_navigation",
+                    "tool": "navigate",
+                    "input": {"target": result.navigation["target"]},
+                    "result": {
+                        "target": result.navigation["target"],
+                        "property_id": None,
+                        "path": result.navigation["path"],
+                    },
+                }
+            )
+        return ProviderResponse(
+            content=result.content,
+            raw={
+                "provider": "demo",
+                "intent": result.intent,
+                "tool_results": tool_results,
+            },
+        )
+
+
+class DisabledProvider(AIProvider):
+    name = "disabled"
+
+    def is_configured(self) -> bool:
+        return False
+
+    def send_message(
+        self,
+        messages: list[ProviderMessage],
+        *,
+        system: str | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
+        max_tokens: int = 1024,
+    ) -> ProviderResponse:
+        raise AIProviderError("AI assistant is disabled.")
+
+
 PROVIDER_REGISTRY: dict[str, type[AIProvider]] = {
     AnthropicProvider.name: AnthropicProvider,
+    DemoProvider.name: DemoProvider,
+    DisabledProvider.name: DisabledProvider,
 }
+
+
+def get_active_provider_mode() -> str:
+    if not getattr(settings, "AI_ASSISTANT_ENABLED", True):
+        return DisabledProvider.name
+    mode = getattr(settings, "AI_PROVIDER_MODE", AnthropicProvider.name)
+    if mode not in PROVIDER_REGISTRY:
+        raise AIProviderError(f"Unknown AI provider mode: {mode}")
+    return mode
 
 
 def get_provider(name: str, **kwargs) -> AIProvider:
