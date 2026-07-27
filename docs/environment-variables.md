@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | `DJANGO_SETTINGS_MODULE` | `config.settings.local` | Selects Django settings module. |
 | `SECRET_KEY` | `change-me` | Django signing secret. Use a strong private value outside local development. |
+| `ANTHROPIC_API_KEY` | empty locally | Enables the AI assistant when populated. Keep this value server-side only. |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Anthropic model ID used by the assistant provider. |
 | `DEBUG` | `true` | Enables local debug behavior. Must be `false` in production. |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,backend` | Hosts Django will serve. |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Frontend origins allowed to call the API. |
@@ -39,6 +41,7 @@
 | `VERIFICATION_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum uploaded verification document size in megabytes. |
 | `VERIFICATION_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed verification document MIME types. |
 | `VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed verification document extensions. |
+| `DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE` | `20/hour` | Scoped rate limit for assistant messages and AI search. |
 
 ## Production Variables
 

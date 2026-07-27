@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -42,6 +43,8 @@ class VerificationRequestViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return VerificationRequest.objects.none()
         return VerificationRequest.objects.filter(user=self.request.user).select_related("reviewer")
 
     def create(self, request, *args, **kwargs):
@@ -113,6 +116,8 @@ class PropertyVerificationViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return PropertyVerification.objects.none()
         return PropertyVerification.objects.filter(
             submitted_by=self.request.user
         ).select_related("property", "reviewer")
@@ -207,8 +212,13 @@ class BaseVerificationDecisionView(APIView):
     """
 
     permission_classes = [IsAuthenticated, IsAdmin]
+    serializer_class = VerificationDecisionSerializer
     target_status: str = ""
 
+    @extend_schema(
+        request=VerificationDecisionSerializer,
+        responses={200: AdminVerificationRequestSerializer},
+    )
     def post(self, request, pk):
         verification_request = get_object_or_404(VerificationRequest, pk=pk)
         serializer = VerificationDecisionSerializer(data=request.data)
@@ -264,8 +274,13 @@ class AdminPropertyVerificationDetailView(generics.RetrieveAPIView):
 
 class BasePropertyVerificationDecisionView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
+    serializer_class = VerificationDecisionSerializer
     target_status: str = ""
 
+    @extend_schema(
+        request=VerificationDecisionSerializer,
+        responses={200: AdminPropertyVerificationSerializer},
+    )
     def post(self, request, pk):
         property_verification = get_object_or_404(PropertyVerification, pk=pk)
         serializer = VerificationDecisionSerializer(data=request.data)

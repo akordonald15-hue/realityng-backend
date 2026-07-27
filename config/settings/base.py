@@ -30,6 +30,8 @@ if env_file.exists():
     environ.Env.read_env(env_file)
 
 SECRET_KEY = env("SECRET_KEY", default="change-me-in-local-development-secret-key")
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
+ANTHROPIC_MODEL = env("ANTHROPIC_MODEL", default="claude-sonnet-5")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 ROOT_URLCONF = "config.urls"
@@ -62,6 +64,7 @@ LOCAL_APPS = [
     "apps.accounts",
     "apps.properties",
     "apps.trust",
+    "apps.assistant",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -117,6 +120,7 @@ REST_FRAMEWORK = {
         "viewing_create": env("DRF_THROTTLE_VIEWING_CREATE_RATE", default="20/hour"),
         "application_create": env("DRF_THROTTLE_APPLICATION_CREATE_RATE", default="10/hour"),
         "property_upload": env("DRF_THROTTLE_PROPERTY_UPLOAD_RATE", default="30/hour"),
+        "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
 
@@ -141,6 +145,7 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "ENUM_NAME_OVERRIDES": {
+        "AIConversationStatusEnum": "apps.assistant.models.AIConversation.Status",
         "InquiryStatusEnum": "apps.properties.choices.InquiryStatus",
         "RentalApplicationStatusEnum": "apps.properties.choices.RentalApplicationStatus",
         "RoleEnum": "apps.accounts.choices.RoleName",
