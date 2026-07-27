@@ -59,7 +59,8 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin &&
       mc mb --ignore-existing local/realityng-local &&
-      mc anonymous set download local/realityng-local
+      mc anonymous set download local/realityng-local &&
+      mc mb --ignore-existing local/realityng-verification-private
       "
     networks:
       - realityng-backend
@@ -86,6 +87,7 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET_NAME: realityng-local
+      VERIFICATION_DOCUMENT_BUCKET_NAME: realityng-verification-private
       USE_S3_MEDIA_STORAGE: "true"
       PROPERTY_IMAGE_MAX_COUNT: "30"
       PROPERTY_IMAGE_MAX_SIZE_MB: "10"

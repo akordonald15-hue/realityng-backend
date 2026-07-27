@@ -61,6 +61,7 @@ LOCAL_APPS = [
     "apps.core",
     "apps.accounts",
     "apps.properties",
+    "apps.trust",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -144,6 +145,8 @@ SPECTACULAR_SETTINGS = {
         "RentalApplicationStatusEnum": "apps.properties.choices.RentalApplicationStatus",
         "RoleEnum": "apps.accounts.choices.RoleName",
         "ViewingStatusEnum": "apps.properties.choices.ViewingStatus",
+        "VerificationStatusEnum": "apps.trust.choices.VerificationStatus",
+        "VerificationTypeEnum": "apps.trust.choices.VerificationType",
     },
 }
 
@@ -168,6 +171,20 @@ PROPERTY_IMAGE_ALLOWED_TYPES = env.list(
 PROPERTY_IMAGE_ALLOWED_EXTENSIONS = env.list(
     "PROPERTY_IMAGE_ALLOWED_EXTENSIONS",
     default=[".jpg", ".jpeg", ".png", ".webp"],
+)
+
+VERIFICATION_DOCUMENT_MAX_SIZE_MB = env.int("VERIFICATION_DOCUMENT_MAX_SIZE_MB", default=10)
+VERIFICATION_DOCUMENT_ALLOWED_TYPES = env.list(
+    "VERIFICATION_DOCUMENT_ALLOWED_TYPES",
+    default=["application/pdf", "image/jpeg", "image/png"],
+)
+VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS = env.list(
+    "VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS",
+    default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
+VERIFICATION_DOCUMENT_BUCKET_NAME = env(
+    "VERIFICATION_DOCUMENT_BUCKET_NAME",
+    default="realityng-verification-private",
 )
 
 TEMPLATES = [
