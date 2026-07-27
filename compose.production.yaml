@@ -66,6 +66,7 @@ services:
     command: server /data --console-address ":9001"
     env_file:
       - .env.production
+    environment: !reset []
     restart: unless-stopped
     ports: !reset []
     volumes:
