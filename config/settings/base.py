@@ -8,6 +8,7 @@ from pathlib import Path
 
 import environ
 import sentry_sdk
+from corsheaders.defaults import default_headers
 from sentry_sdk.integrations.django import DjangoIntegration
 
 from apps.core.logging import LOGGING
@@ -221,6 +222,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+CORS_ALLOW_HEADERS = (*default_headers, "x-request-id")
 
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = False
