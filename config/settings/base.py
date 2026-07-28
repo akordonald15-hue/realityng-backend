@@ -222,7 +222,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
-CORS_ALLOW_HEADERS = (*default_headers, "x-request-id")
+CORS_ALLOW_HEADERS = (*default_headers, "x-request-id", "sentry-trace", "baggage")
 
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = False
