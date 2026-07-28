@@ -20,6 +20,7 @@ env = environ.Env(
     ALLOWED_HOSTS=(list, []),
     CORS_ALLOWED_ORIGINS=(list, []),
     CSRF_TRUSTED_ORIGINS=(list, []),
+    CORS_ALLOW_CREDENTIALS=(bool, True),
     DATABASE_URL=(str, "postgres://realityng:realityng@postgres:5432/realityng"),
     REDIS_URL=(str, "redis://redis:6379/0"),
     SENTRY_DSN=(str, ""),
@@ -222,6 +223,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+CORS_ALLOW_CREDENTIALS = env("CORS_ALLOW_CREDENTIALS")
 CORS_ALLOW_HEADERS = (*default_headers, "x-request-id", "sentry-trace", "baggage")
 
 SESSION_COOKIE_HTTPONLY = True
