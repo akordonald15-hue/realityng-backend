@@ -46,6 +46,14 @@
 | `VERIFICATION_SIGNED_URL_EXPIRY` | `300` | Signed verification document URL lifetime in seconds. |
 | `DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE` | `20/hour` | Scoped rate limit for assistant messages and AI search. |
 
+## Frontend Map Variables
+
+These variables are configured in the frontend deployment, not the backend.
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | empty locally | Browser key for Google Maps JavaScript. This is public by design and must be restricted in Google Cloud by HTTP referrer. |
+
 ## Production Variables
 
 | Variable | Purpose |

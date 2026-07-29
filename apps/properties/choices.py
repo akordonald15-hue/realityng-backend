@@ -26,6 +26,21 @@ class PropertyType(models.TextChoices):
     MIXED_USE = "mixed_use", "Mixed Use"
 
 
+class LocationPrecision(models.TextChoices):
+    EXACT = "exact", "Exact"
+    NEIGHBORHOOD = "neighborhood", "Neighborhood"
+    CITY = "city", "City"
+    HIDDEN = "hidden", "Hidden"
+
+
+class GeocodingStatus(models.TextChoices):
+    NOT_GEOCODED = "not_geocoded", "Not Geocoded"
+    PENDING = "pending", "Pending"
+    GEOCODED = "geocoded", "Geocoded"
+    FAILED = "failed", "Failed"
+    MANUAL = "manual", "Manual"
+
+
 class InquiryType(models.TextChoices):
     RENT = "rent", "Rent"
     PURCHASE = "purchase", "Purchase"

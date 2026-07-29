@@ -1,7 +1,7 @@
 import pytest
 from rest_framework.test import APIRequestFactory
 
-from apps.properties.choices import ListingType, PropertyStatus, PropertyType
+from apps.properties.choices import ListingType, LocationPrecision, PropertyStatus, PropertyType
 from apps.properties.serializers import PropertySerializer
 
 
@@ -78,3 +78,43 @@ def test_serializer_sets_owner_and_draft_status(user, property_payload):
 
     assert prop.owner == user
     assert prop.status == PropertyStatus.DRAFT
+
+
+@pytest.mark.django_db
+def test_serializer_requires_latitude_and_longitude_together(user, property_payload):
+    property_payload["latitude"] = "6.469800"
+    request = APIRequestFactory().post("/")
+    request.user = user
+
+    serializer = PropertySerializer(data=property_payload, context={"request": request})
+
+    assert not serializer.is_valid()
+    assert "latitude" in serializer.errors
+
+
+@pytest.mark.django_db
+def test_serializer_rejects_coordinates_outside_valid_range(user, property_payload):
+    property_payload["latitude"] = "91.000000"
+    property_payload["longitude"] = "3.585200"
+    request = APIRequestFactory().post("/")
+    request.user = user
+
+    serializer = PropertySerializer(data=property_payload, context={"request": request})
+
+    assert not serializer.is_valid()
+    assert "latitude" in serializer.errors
+
+
+@pytest.mark.django_db
+def test_serializer_requires_exact_precision_before_showing_exact_location(user, property_payload):
+    property_payload["latitude"] = "6.469800"
+    property_payload["longitude"] = "3.585200"
+    property_payload["location_precision"] = LocationPrecision.NEIGHBORHOOD
+    property_payload["show_exact_location"] = True
+    request = APIRequestFactory().post("/")
+    request.user = user
+
+    serializer = PropertySerializer(data=property_payload, context={"request": request})
+
+    assert not serializer.is_valid()
+    assert "show_exact_location" in serializer.errors

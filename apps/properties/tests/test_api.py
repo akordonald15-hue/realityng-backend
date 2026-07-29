@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from apps.accounts.models import AuditLog
-from apps.properties.choices import ListingType, PropertyStatus, PropertyType
+from apps.properties.choices import ListingType, LocationPrecision, PropertyStatus, PropertyType
 from apps.properties.models import Property
 
 
@@ -199,3 +199,108 @@ def test_public_endpoint_filters_searches_and_orders(api_client, user, property_
     assert response.status_code == status.HTTP_200_OK
     assert response.data["count"] == 1
     assert response.data["results"][0]["title"] == "Budget Abuja Apartment"
+
+
+@pytest.mark.django_db
+def test_public_endpoint_filters_by_map_bounds(api_client, user):
+    inside = Property.objects.create(
+        owner=user,
+        status=PropertyStatus.APPROVED,
+        title="Lekki Map Apartment",
+        description="Apartment with approved public map metadata.",
+        property_type=PropertyType.APARTMENT,
+        listing_type=ListingType.RENT,
+        price="4500000.00",
+        currency="NGN",
+        country="Nigeria",
+        state="Lagos",
+        city="Lagos",
+        lga="Eti-Osa",
+        neighborhood="Lekki Phase 1",
+        landmark="Admiralty Way",
+        address="Admiralty Way, Lekki Phase 1",
+        latitude="6.469800",
+        longitude="3.585200",
+        floor_area="180.00",
+        bedrooms=3,
+        bathrooms=3,
+    )
+    Property.objects.create(
+        owner=user,
+        status=PropertyStatus.APPROVED,
+        title="Uyo Map Apartment",
+        description="Apartment outside the Lagos viewport.",
+        property_type=PropertyType.APARTMENT,
+        listing_type=ListingType.RENT,
+        price="1800000.00",
+        currency="NGN",
+        country="Nigeria",
+        state="Akwa Ibom",
+        city="Uyo",
+        address="Shelter Afrique",
+        latitude="5.037700",
+        longitude="7.912800",
+        floor_area="120.00",
+        bedrooms=2,
+        bathrooms=2,
+    )
+
+    response = api_client.get(
+        reverse("public-properties-list"),
+        {
+            "min_lat": "6.0",
+            "max_lat": "6.7",
+            "min_lng": "3.0",
+            "max_lng": "3.8",
+            "has_map_location": "true",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 1
+    assert response.data["results"][0]["id"] == str(inside.id)
+
+
+@pytest.mark.django_db
+def test_public_endpoint_returns_approximate_location_metadata(api_client, property_listing):
+    property_listing.latitude = "6.469812"
+    property_listing.longitude = "3.585223"
+    property_listing.location_precision = LocationPrecision.NEIGHBORHOOD
+    property_listing.display_location = "Lekki Phase 1, Lagos"
+    property_listing.address = "Private close off Admiralty Way"
+    property_listing.save(
+        update_fields=[
+            "latitude",
+            "longitude",
+            "location_precision",
+            "display_location",
+            "address",
+            "updated_at",
+        ]
+    )
+
+    response = api_client.get(reverse("public-properties-detail", args=[property_listing.slug]))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert str(response.data["latitude"]) == "6.470"
+    assert str(response.data["longitude"]) == "3.585"
+    assert response.data["address"] == "Lekki Phase 1, Lagos"
+    assert response.data["approximate_location"] is True
+    assert response.data["location_metadata"]["has_map_location"] is True
+
+
+@pytest.mark.django_db
+def test_public_endpoint_hides_hidden_location_coordinates(api_client, property_listing):
+    property_listing.latitude = "6.469812"
+    property_listing.longitude = "3.585223"
+    property_listing.location_precision = LocationPrecision.HIDDEN
+    property_listing.save(
+        update_fields=["latitude", "longitude", "location_precision", "updated_at"]
+    )
+
+    response = api_client.get(reverse("public-properties-detail", args=[property_listing.slug]))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["latitude"] is None
+    assert response.data["longitude"] is None
+    assert response.data["location_metadata"]["has_map_location"] is False

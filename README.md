@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the RealityNG backend through Sprint 4.5 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, dashboard summaries, and apartment-share listing support.
+This repository contains the RealityNG backend through Sprint 8 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, inquiries, viewings, rental applications, verification workflows, the guided assistant framework, dashboard summaries, apartment-share listing support, and location-intelligence fields for privacy-safe map discovery.
 
 ## Repository Structure
 
@@ -115,6 +115,8 @@ Sprint 1 endpoints are included under `/api/v1/auth/`, `/api/v1/users/`, `/api/v
 Sprint 2 property endpoints are included under `/api/v1/properties/` and `/api/v1/public/properties/`.
 
 Sprint 3 property image endpoints are nested under `/api/v1/properties/{slug}/images/`.
+
+Sprint 8 extends property responses with privacy-safe location metadata for map/list discovery. Public responses expose rounded or hidden coordinates according to each property's location precision. Exact private coordinates remain available only through owner/admin workflows where permitted.
 
 ## Authentication Flow
 

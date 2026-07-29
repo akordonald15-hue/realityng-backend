@@ -257,7 +257,7 @@ class PublicPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
     lookup_field = "slug"
     filterset_class = PublicPropertyFilter
-    search_fields = ["title"]
+    search_fields = ["title", "city", "lga", "neighborhood", "landmark"]
     ordering_fields = ["created_at", "price", "title", "featured"]
     ordering = ["-featured", "-created_at"]
 

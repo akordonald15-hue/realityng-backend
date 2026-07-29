@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
@@ -12,6 +14,7 @@ from apps.properties.choices import (
     InquiryStatus,
     InquiryType,
     ListingType,
+    LocationPrecision,
     PropertyStatus,
     PropertyType,
     RentalApplicationStatus,
@@ -36,7 +39,16 @@ PROPERTY_MUTABLE_FIELDS = [
     "country",
     "state",
     "city",
+    "lga",
+    "neighborhood",
+    "landmark",
     "address",
+    "latitude",
+    "longitude",
+    "location_precision",
+    "show_exact_location",
+    "geocoding_status",
+    "display_location",
     "bedrooms",
     "bathrooms",
     "parking_spaces",
@@ -171,7 +183,16 @@ class PropertySerializer(serializers.ModelSerializer):
             "country",
             "state",
             "city",
+            "lga",
+            "neighborhood",
+            "landmark",
             "address",
+            "latitude",
+            "longitude",
+            "location_precision",
+            "show_exact_location",
+            "geocoding_status",
+            "display_location",
             "bedrooms",
             "bathrooms",
             "parking_spaces",
@@ -227,6 +248,16 @@ class PropertySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Currency must be a valid 3-letter code.")
         return value
 
+    def validate_latitude(self, value):
+        if value is not None and not Decimal("-90") <= value <= Decimal("90"):
+            raise serializers.ValidationError("Latitude must be between -90 and 90.")
+        return value
+
+    def validate_longitude(self, value):
+        if value is not None and not Decimal("-180") <= value <= Decimal("180"):
+            raise serializers.ValidationError("Longitude must be between -180 and 180.")
+        return value
+
     def validate(self, attrs: dict) -> dict:
         data = {**getattr(self.instance, "__dict__", {}), **attrs}
         missing_location = [
@@ -252,6 +283,24 @@ class PropertySerializer(serializers.ModelSerializer):
         elif not data.get("floor_area"):
             raise serializers.ValidationError(
                 {"floor_area": "Built property listings require floor area."}
+            )
+
+        latitude = data.get("latitude")
+        longitude = data.get("longitude")
+        if (latitude is None) ^ (longitude is None):
+            raise serializers.ValidationError(
+                {"latitude": "Latitude and longitude must be provided together."}
+            )
+
+        location_precision = data.get("location_precision")
+        show_exact_location = data.get("show_exact_location")
+        if show_exact_location and location_precision != LocationPrecision.EXACT:
+            raise serializers.ValidationError(
+                {
+                    "show_exact_location": (
+                        "Exact location can only be shown when location precision is exact."
+                    )
+                }
             )
 
         return attrs
@@ -286,10 +335,17 @@ class PropertySerializer(serializers.ModelSerializer):
 
 
 class PublicPropertySerializer(serializers.ModelSerializer):
+    address = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
     image_count = serializers.SerializerMethodField()
     image_gallery = serializers.SerializerMethodField()
     is_favorited = serializers.SerializerMethodField()
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+    location_precision = serializers.SerializerMethodField()
+    approximate_location = serializers.SerializerMethodField()
+    display_location = serializers.SerializerMethodField()
+    location_metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -305,7 +361,17 @@ class PublicPropertySerializer(serializers.ModelSerializer):
             "country",
             "state",
             "city",
+            "lga",
+            "neighborhood",
+            "landmark",
             "address",
+            "latitude",
+            "longitude",
+            "location_precision",
+            "approximate_location",
+            "display_location",
+            "geocoding_status",
+            "location_metadata",
             "bedrooms",
             "bathrooms",
             "parking_spaces",
@@ -322,6 +388,11 @@ class PublicPropertySerializer(serializers.ModelSerializer):
     def get_cover_image_url(self, obj: Property) -> str:
         cover = next((image for image in obj.images.all() if image.is_cover), None)
         return build_media_url(cover.image, self.context.get("request")) if cover else ""
+
+    def get_address(self, obj: Property) -> str:
+        if obj.location_precision == LocationPrecision.EXACT and obj.show_exact_location:
+            return obj.address
+        return obj.public_display_location()
 
     def get_image_count(self, obj: Property) -> int:
         if hasattr(obj, "image_count_value"):
@@ -346,6 +417,39 @@ class PublicPropertySerializer(serializers.ModelSerializer):
             return obj.id in favorite_property_ids
 
         return Favorite.objects.filter(user=user, property=obj).exists()
+
+    @extend_schema_field(serializers.DecimalField(max_digits=9, decimal_places=6, allow_null=True))
+    def get_latitude(self, obj: Property):
+        latitude, _ = obj.public_coordinates()
+        return latitude
+
+    @extend_schema_field(serializers.DecimalField(max_digits=9, decimal_places=6, allow_null=True))
+    def get_longitude(self, obj: Property):
+        _, longitude = obj.public_coordinates()
+        return longitude
+
+    def get_location_precision(self, obj: Property) -> str:
+        if obj.location_precision == LocationPrecision.EXACT and not obj.show_exact_location:
+            return LocationPrecision.NEIGHBORHOOD
+        return obj.location_precision
+
+    def get_approximate_location(self, obj: Property) -> bool:
+        return obj.approximate_location
+
+    def get_display_location(self, obj: Property) -> str:
+        return obj.public_display_location()
+
+    def get_location_metadata(self, obj: Property) -> dict:
+        has_map_location = obj.public_coordinates() != (None, None)
+        return {
+            "has_map_location": has_map_location,
+            "precision_label": obj.get_location_precision_display(),
+            "privacy_note": (
+                "Location is approximate for privacy."
+                if obj.approximate_location
+                else "Exact location is visible with owner approval."
+            ),
+        }
 
 
 class FavoriteSerializer(serializers.ModelSerializer):

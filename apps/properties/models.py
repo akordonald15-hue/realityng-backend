@@ -9,9 +9,11 @@ from django.utils.text import slugify
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
 from apps.properties.choices import (
     ContactPreference,
+    GeocodingStatus,
     InquiryStatus,
     InquiryType,
     ListingType,
+    LocationPrecision,
     PropertyStatus,
     PropertyType,
     RentalApplicationStatus,
@@ -35,7 +37,24 @@ class Property(BaseModel):
     country = models.CharField(max_length=100)
     state = models.CharField(max_length=100)
     city = models.CharField(max_length=120)
+    lga = models.CharField(max_length=120, blank=True)
+    neighborhood = models.CharField(max_length=160, blank=True)
+    landmark = models.CharField(max_length=160, blank=True)
     address = models.TextField()
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_precision = models.CharField(
+        max_length=20,
+        choices=LocationPrecision.choices,
+        default=LocationPrecision.NEIGHBORHOOD,
+    )
+    show_exact_location = models.BooleanField(default=False)
+    geocoding_status = models.CharField(
+        max_length=20,
+        choices=GeocodingStatus.choices,
+        default=GeocodingStatus.NOT_GEOCODED,
+    )
+    display_location = models.CharField(max_length=220, blank=True)
     bedrooms = models.PositiveSmallIntegerField(null=True, blank=True)
     bathrooms = models.PositiveSmallIntegerField(null=True, blank=True)
     parking_spaces = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -58,6 +77,11 @@ class Property(BaseModel):
         indexes = [
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["city", "status"]),
+            models.Index(fields=["state", "city", "status"]),
+            models.Index(fields=["lga", "status"]),
+            models.Index(fields=["neighborhood", "status"]),
+            models.Index(fields=["latitude", "longitude"]),
+            models.Index(fields=["location_precision", "status"]),
             models.Index(fields=["property_type", "listing_type", "status"]),
             models.Index(fields=["price"]),
             models.Index(fields=["owner", "status"]),
@@ -105,6 +129,26 @@ class Property(BaseModel):
     @property
     def price_as_decimal(self) -> Decimal:
         return Decimal(self.price)
+
+    def public_display_location(self) -> str:
+        if self.display_location:
+            return self.display_location
+        parts = [self.neighborhood, self.city, self.state]
+        return ", ".join(part for part in parts if part)
+
+    @property
+    def approximate_location(self) -> bool:
+        return not (self.location_precision == LocationPrecision.EXACT and self.show_exact_location)
+
+    def public_coordinates(self) -> tuple[Decimal | None, Decimal | None]:
+        if self.latitude is None or self.longitude is None:
+            return None, None
+        if self.location_precision == LocationPrecision.HIDDEN:
+            return None, None
+        if self.location_precision == LocationPrecision.EXACT and self.show_exact_location:
+            return self.latitude, self.longitude
+        decimal_places = 3 if self.location_precision == LocationPrecision.NEIGHBORHOOD else 2
+        return round(self.latitude, decimal_places), round(self.longitude, decimal_places)
 
 
 class PropertyImage(UUIDPrimaryKeyMixin):
