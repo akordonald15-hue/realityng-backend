@@ -100,3 +100,14 @@ class LeadPipelineStage(models.TextChoices):
     NEGOTIATING = "negotiating", "Negotiating"
     CONVERTED = "converted", "Converted"
     CLOSED_LOST = "closed_lost", "Closed Lost"
+
+
+class LeadActivityType(models.TextChoices):
+    NOTE = "note", "Note"
+    CALL = "call", "Call"
+    WHATSAPP = "whatsapp", "WhatsApp"
+    EMAIL = "email", "Email"
+    FOLLOW_UP_SCHEDULED = "follow_up_scheduled", "Follow-up Scheduled"
+    FOLLOW_UP_COMPLETED = "follow_up_completed", "Follow-up Completed"
+    STATUS_CHANGED = "status_changed", "Status Changed"
+    ASSIGNED = "assigned", "Assigned"

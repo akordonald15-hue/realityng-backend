@@ -13,6 +13,7 @@ from apps.properties.choices import (
     GeocodingStatus,
     InquiryStatus,
     InquiryType,
+    LeadActivityType,
     LeadPipelineStage,
     LeadPriority,
     ListingType,
@@ -372,6 +373,38 @@ class Inquiry(BaseModel):
             self.converted_at = timezone.now()
             update_fields.append("converted_at")
         self.save(update_fields=update_fields)
+
+
+class LeadActivity(BaseModel):
+    inquiry = models.ForeignKey(
+        Inquiry,
+        on_delete=models.CASCADE,
+        related_name="activities",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="lead_activities",
+    )
+    activity_type = models.CharField(
+        max_length=32,
+        choices=LeadActivityType.choices,
+    )
+    note = models.TextField(blank=True)
+    scheduled_for = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["inquiry", "created_at"]),
+            models.Index(fields=["inquiry", "activity_type"]),
+            models.Index(fields=["scheduled_for"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_activity_type_display()} on inquiry {self.inquiry_id}"
 
 
 class Viewing(BaseModel):

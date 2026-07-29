@@ -26,6 +26,44 @@ def emit_inquiry_event(
     )
 
 
+def emit_lead_assigned_event(
+    *,
+    actor: User,
+    inquiry: Inquiry,
+    metadata: dict | None = None,
+) -> None:
+    create_audit_log(
+        actor=actor,
+        action="lead_assigned",
+        entity=inquiry,
+        metadata={
+            "assigned_to_id": str(inquiry.assigned_to_id) if inquiry.assigned_to_id else None,
+            "property_id": str(inquiry.property_id),
+            **(metadata or {}),
+        },
+    )
+
+
+def emit_lead_reassigned_event(
+    *,
+    actor: User,
+    inquiry: Inquiry,
+    previous_assigned_to_id: str | None,
+    metadata: dict | None = None,
+) -> None:
+    create_audit_log(
+        actor=actor,
+        action="lead_reassigned",
+        entity=inquiry,
+        metadata={
+            "previous_assigned_to_id": previous_assigned_to_id,
+            "assigned_to_id": str(inquiry.assigned_to_id) if inquiry.assigned_to_id else None,
+            "property_id": str(inquiry.property_id),
+            **(metadata or {}),
+        },
+    )
+
+
 def emit_viewing_event(
     *,
     actor: User,
