@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from apps.properties.leads import LeadViewSet
+from apps.properties.leads import DashboardLeadsSummaryView, LeadViewSet
 from apps.properties.views import (
     DashboardActivityView,
     DashboardSummaryView,
@@ -27,5 +27,10 @@ urlpatterns = [
     path("dashboard/activity/", DashboardActivityView.as_view(), name="dashboard-activity"),
     path("dashboard/summary/", DashboardSummaryView.as_view(), name="dashboard-summary"),
     path("dashboard/transactions/", TransactionCenterView.as_view(), name="dashboard-transactions"),
+    path(
+        "dashboard/leads/summary/",
+        DashboardLeadsSummaryView.as_view(),
+        name="dashboard-leads-summary",
+    ),
     path("", include(router.urls)),
 ]

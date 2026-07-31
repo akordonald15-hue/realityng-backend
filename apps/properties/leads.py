@@ -4,12 +4,14 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters import rest_framework as filters
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.accounts.services import user_is_admin
 from apps.properties.choices import LeadActivityType, LeadPipelineStage, LeadPriority
@@ -267,3 +269,73 @@ class LeadViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gen
         serializer.is_valid(raise_exception=True)
         activity = serializer.save()
         return Response(LeadActivitySerializer(activity).data, status=status.HTTP_201_CREATED)
+
+
+class DashboardLeadsSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    def get(self, request):
+        user = request.user
+        queryset = Inquiry.objects.filter(property__deleted_at__isnull=True)
+        if not user_is_admin(user):
+            queryset = queryset.filter(Q(property_owner=user) | Q(assigned_to=user))
+
+        total_leads = queryset.count()
+        new_leads = queryset.filter(pipeline_stage=LeadPipelineStage.NEW).count()
+        contacted_leads = queryset.filter(pipeline_stage=LeadPipelineStage.CONTACTED).count()
+        upcoming_follow_ups = queryset.filter(
+            next_follow_up_at__isnull=False,
+            next_follow_up_at__gte=timezone.now(),
+        ).count()
+        viewings_or_later = queryset.filter(
+            pipeline_stage__in=[
+                LeadPipelineStage.VIEWING_SCHEDULED,
+                LeadPipelineStage.APPLICATION_STARTED,
+                LeadPipelineStage.APPLICATION_SUBMITTED,
+                LeadPipelineStage.NEGOTIATING,
+                LeadPipelineStage.CONVERTED,
+            ]
+        ).count()
+        applications_or_later = queryset.filter(
+            pipeline_stage__in=[
+                LeadPipelineStage.APPLICATION_SUBMITTED,
+                LeadPipelineStage.NEGOTIATING,
+                LeadPipelineStage.CONVERTED,
+            ]
+        ).count()
+        converted_count = queryset.filter(pipeline_stage=LeadPipelineStage.CONVERTED).count()
+        closed_lost_count = queryset.filter(pipeline_stage=LeadPipelineStage.CLOSED_LOST).count()
+
+        viewing_conversion_rate = (
+            round((viewings_or_later / total_leads) * 100, 1) if total_leads else 0.0
+        )
+        application_conversion_rate = (
+            round((applications_or_later / total_leads) * 100, 1) if total_leads else 0.0
+        )
+
+        response_seconds = [
+            (inquiry.last_contacted_at - inquiry.created_at).total_seconds()
+            for inquiry in queryset.filter(last_contacted_at__isnull=False).only(
+                "created_at", "last_contacted_at"
+            )
+        ]
+        average_response_seconds = (
+            round(sum(response_seconds) / len(response_seconds), 0)
+            if response_seconds
+            else None
+        )
+
+        return Response(
+            {
+                "total_leads": total_leads,
+                "new_leads": new_leads,
+                "contacted_leads": contacted_leads,
+                "upcoming_follow_ups": upcoming_follow_ups,
+                "viewing_conversion_rate": viewing_conversion_rate,
+                "application_conversion_rate": application_conversion_rate,
+                "converted_count": converted_count,
+                "closed_lost_count": closed_lost_count,
+                "average_response_seconds": average_response_seconds,
+            }
+        )
