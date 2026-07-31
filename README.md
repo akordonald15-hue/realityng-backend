@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the RealityNG backend through Sprint 8 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, inquiries, viewings, rental applications, verification workflows, the guided assistant framework, dashboard summaries, apartment-share listing support, and location-intelligence fields for privacy-safe map discovery.
+This repository contains the RealityNG backend through Sprint 9.1 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, inquiries, viewings, rental applications, verification workflows, the guided assistant framework, dashboard summaries, apartment-share listing support, location-intelligence fields for privacy-safe map discovery, and the verified services marketplace foundation.
 
 ## Repository Structure
 
@@ -11,6 +11,7 @@ This repository contains the RealityNG backend through Sprint 8 foundations. It 
 |-- apps/
 |   |-- common/          # Shared abstract model primitives
 |   |-- properties/      # Property listings, review workflow, media, public browse API
+|   |-- services/        # Verified services marketplace foundation
 |   `-- core/            # Health endpoint, request IDs, logging
 |-- config/
 |   |-- settings/        # base.py, local.py, production.py
@@ -117,6 +118,8 @@ Sprint 2 property endpoints are included under `/api/v1/properties/` and `/api/v
 Sprint 3 property image endpoints are nested under `/api/v1/properties/{slug}/images/`.
 
 Sprint 8 extends property responses with privacy-safe location metadata for map/list discovery. Public responses expose rounded or hidden coordinates according to each property's location precision. Exact private coordinates remain available only through owner/admin workflows where permitted.
+
+Sprint 9.1 service marketplace endpoints are included under `/api/v1/services/categories/`, `/api/v1/services/providers/`, and `/api/v1/services/providers/{slug}/`. Public responses expose active providers, public service areas, trade categories, and verification badge snapshots only. Private addresses, verification documents, and internal moderation fields are not serialized.
 
 ## Authentication Flow
 
