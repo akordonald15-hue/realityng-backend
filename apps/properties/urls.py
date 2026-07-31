@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from apps.properties.leads import LeadViewSet
 from apps.properties.views import (
     DashboardActivityView,
     DashboardSummaryView,
@@ -20,6 +21,7 @@ router.register("favorites", FavoriteViewSet, basename="favorites")
 router.register("inquiries", InquiryViewSet, basename="inquiries")
 router.register("viewings", ViewingViewSet, basename="viewings")
 router.register("applications", RentalApplicationViewSet, basename="applications")
+router.register("leads", LeadViewSet, basename="leads")
 
 urlpatterns = [
     path("dashboard/activity/", DashboardActivityView.as_view(), name="dashboard-activity"),
