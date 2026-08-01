@@ -58,3 +58,88 @@ class NotificationPreference(BaseModel):
     def __str__(self) -> str:
         return f"NotificationPreference<{self.user_id}>"
 
+class ConversationThread(BaseModel):
+    property = models.ForeignKey(
+        "properties.Property",
+        on_delete=models.CASCADE,
+        related_name="conversation_threads",
+    )
+    inquiry = models.ForeignKey(
+        "properties.Inquiry",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversation_threads",
+    )
+    viewing = models.ForeignKey(
+        "properties.Viewing",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversation_threads",
+    )
+    application = models.ForeignKey(
+        "properties.RentalApplication",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversation_threads",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="created_conversation_threads",
+    )
+    is_closed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"ConversationThread<{self.id}>"
+
+
+class ConversationParticipant(BaseModel):
+    thread = models.ForeignKey(
+        ConversationThread,
+        on_delete=models.CASCADE,
+        related_name="participants",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="conversation_participations",
+    )
+    last_read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["thread", "user"], name="unique_thread_participant"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"ConversationParticipant<{self.thread_id}:{self.user_id}>"
+
+
+class Message(BaseModel):
+    thread = models.ForeignKey(
+        ConversationThread,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sent_messages",
+    )
+    body = models.TextField(max_length=4000)
+    edited_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"Message<{self.id}>"
+
