@@ -6,8 +6,16 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.notifications.models import Notification
-from apps.notifications.serializers import NotificationSerializer
+from apps.notifications.models import (
+    ConversationParticipant,
+    ConversationThread,
+    Notification,
+)
+from apps.notifications.serializers import (
+    ConversationThreadSerializer,
+    MessageSerializer,
+    NotificationSerializer,
+)
 
 
 class NotificationViewSet(
@@ -42,3 +50,58 @@ class NotificationViewSet(
             read_at=timezone.now()
         )
         return Response({"marked_read": updated})
+
+class ConversationThreadViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = ConversationThreadSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ConversationThread.objects.none()
+        return ConversationThread.objects.filter(
+            participants__user=self.request.user
+        ).distinct()
+
+    def perform_create(self, serializer):
+        thread = serializer.save(created_by=self.request.user)
+        ConversationParticipant.objects.get_or_create(
+            thread=thread, user=self.request.user
+        )
+        property_owner_id = (
+            thread.property.owner_id
+            if hasattr(thread.property, "owner_id")
+            else None
+        )
+        if property_owner_id and property_owner_id != self.request.user.id:
+            ConversationParticipant.objects.get_or_create(
+                thread=thread, user_id=property_owner_id
+            )
+
+    @action(detail=True, methods=["get", "post"], url_path="messages")
+    def messages(self, request, pk=None):
+        thread = self.get_object()
+        if request.method == "GET":
+            queryset = thread.messages.all()
+            serializer = MessageSerializer(queryset, many=True)
+            return Response(serializer.data)
+
+        serializer = MessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        message = serializer.save(thread=thread, sender=request.user)
+        return Response(MessageSerializer(message).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="mark-read")
+    def mark_read(self, request, pk=None):
+        thread = self.get_object()
+        participant, _ = ConversationParticipant.objects.get_or_create(
+            thread=thread, user=request.user
+        )
+        participant.last_read_at = timezone.now()
+        participant.save(update_fields=["last_read_at", "updated_at"])
+        return Response({"marked_read": True})
+
