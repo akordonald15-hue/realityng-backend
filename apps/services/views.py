@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.services import user_is_admin
@@ -16,6 +17,7 @@ from apps.services.filters import PublicServiceProviderFilter
 from apps.services.models import (
     PortfolioImage,
     ProviderTrade,
+    QuoteRequest,
     ServiceArea,
     ServiceProvider,
     TradeCategory,
@@ -36,6 +38,8 @@ from apps.services.serializers import (
     ProviderTradeWriteSerializer,
     PublicServiceProviderDetailSerializer,
     PublicServiceProviderListSerializer,
+    QuoteRequestCreateSerializer,
+    QuoteRequestSerializer,
     ServiceAreaWriteSerializer,
     ServiceProviderOwnerSerializer,
     TradeCategorySerializer,
@@ -43,6 +47,16 @@ from apps.services.serializers import (
     validate_provider_submission,
 )
 from apps.services.services import emit_service_event
+
+
+class ActionScopedThrottleMixin:
+    throttle_scope_by_action: dict[str, str] = {}
+    throttle_classes = [AnonRateThrottle, UserRateThrottle, ScopedRateThrottle]
+
+    def get_throttles(self):
+        if getattr(self, "action", None) in self.throttle_scope_by_action:
+            self.throttle_scope = self.throttle_scope_by_action[self.action]
+        return super().get_throttles()
 
 
 def provider_queryset():
@@ -225,6 +239,33 @@ class ProviderOwnedMixin:
         if getattr(self, "swagger_fake_view", False):
             return self.model.objects.none()
         return self.model.objects.filter(provider=self.get_provider())
+
+
+def quote_request_queryset():
+    return QuoteRequest.objects.select_related(
+        "customer",
+        "provider",
+        "service_category",
+    )
+
+
+def filter_quote_requests(queryset, request):
+    status_value = request.query_params.get("status")
+    search = request.query_params.get("search")
+    ordering = request.query_params.get("ordering", "-created_at")
+    if status_value:
+        queryset = queryset.filter(status=status_value)
+    if search:
+        queryset = queryset.filter(
+            Q(project_title__icontains=search)
+            | Q(project_description__icontains=search)
+            | Q(customer_name__icontains=search)
+            | Q(email__icontains=search)
+            | Q(phone__icontains=search)
+        )
+    if ordering == "oldest":
+        return queryset.order_by("created_at")
+    return queryset.order_by("-created_at")
 
 
 class ProviderTradeManagementViewSet(
@@ -556,3 +597,130 @@ class AdminServiceProviderViewSet(viewsets.ReadOnlyModelViewSet):
             entity=provider,
         )
         return Response(self.get_serializer(provider).data)
+
+
+class PublicQuoteRequestCreateViewSet(
+    ActionScopedThrottleMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = QuoteRequestCreateSerializer
+    permission_classes = [AllowAny]
+    throttle_scope_by_action = {"create": "service_quote_request_create"}
+
+    @extend_schema(
+        request=QuoteRequestCreateSerializer,
+        responses={201: QuoteRequestSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy()
+        data["provider_slug"] = kwargs["provider_slug"]
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        quote_request = serializer.save()
+        emit_service_event(
+            actor=request.user if request.user.is_authenticated else None,
+            action="service_quote.submitted",
+            entity=quote_request,
+            metadata={
+                "provider_id": str(quote_request.provider_id),
+                "status": quote_request.status,
+            },
+        )
+        return Response(
+            QuoteRequestSerializer(quote_request, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ProviderQuoteRequestViewSet(
+    ActionScopedThrottleMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = QuoteRequestSerializer
+    permission_classes = [IsAuthenticated, IsServiceProviderOwner]
+    throttle_scope_by_action = {"list": "service_quote_request_manage"}
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return QuoteRequest.objects.none()
+        provider = self.get_provider()
+        queryset = quote_request_queryset().filter(provider=provider)
+        return filter_quote_requests(queryset, self.request)
+
+    def get_provider(self):
+        return get_current_provider(self.request.user)
+
+    def _transition(self, request, quote_request, action_name):
+        self.check_object_permissions(request, quote_request)
+        if action_name == "viewed":
+            quote_request.mark_viewed()
+            event = "service_quote.viewed"
+        elif action_name == "responded":
+            quote_request.mark_responded()
+            event = "service_quote.responded"
+        else:
+            quote_request.close()
+            event = "service_quote.closed"
+        emit_service_event(
+            actor=request.user,
+            action=event,
+            entity=quote_request,
+            metadata={"status": quote_request.status},
+        )
+        return Response(self.get_serializer(quote_request).data)
+
+    @extend_schema(responses={200: QuoteRequestSerializer})
+    @action(detail=True, methods=["post"], url_path="mark-viewed")
+    def mark_viewed(self, request, pk=None):
+        return self._transition(request, self.get_object(), "viewed")
+
+    @extend_schema(responses={200: QuoteRequestSerializer})
+    @action(detail=True, methods=["post"], url_path="mark-responded")
+    def mark_responded(self, request, pk=None):
+        return self._transition(request, self.get_object(), "responded")
+
+    @extend_schema(responses={200: QuoteRequestSerializer})
+    @action(detail=True, methods=["post"], url_path="close")
+    def close_request(self, request, pk=None):
+        return self._transition(request, self.get_object(), "closed")
+
+
+class AdminQuoteRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = QuoteRequestSerializer
+    permission_classes = [IsAuthenticated, IsServicesAdmin]
+
+    def get_queryset(self):
+        queryset = quote_request_queryset()
+        provider = self.request.query_params.get("provider")
+        if provider:
+            queryset = queryset.filter(provider_id=provider)
+        return filter_quote_requests(queryset, self.request)
+
+    @extend_schema(responses={200: QuoteRequestSerializer})
+    @action(detail=True, methods=["post"], url_path="close")
+    def close_request(self, request, pk=None):
+        quote_request = self.get_object()
+        quote_request.close()
+        emit_service_event(
+            actor=request.user,
+            action="service_quote.admin_closed",
+            entity=quote_request,
+            metadata={"status": quote_request.status},
+        )
+        return Response(self.get_serializer(quote_request).data)
+
+    @extend_schema(responses={200: QuoteRequestSerializer})
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_request(self, request, pk=None):
+        quote_request = self.get_object()
+        quote_request.cancel()
+        emit_service_event(
+            actor=request.user,
+            action="service_quote.admin_cancelled",
+            entity=quote_request,
+            metadata={"status": quote_request.status},
+        )
+        return Response(self.get_serializer(quote_request).data)

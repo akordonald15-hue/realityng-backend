@@ -9,9 +9,11 @@ from django.utils.text import slugify
 from apps.common.models import BaseModel
 from apps.services.choices import (
     PortfolioImageStatus,
+    PreferredContactMethod,
     ProviderStatus,
     ProviderTradeStatus,
     ProviderType,
+    QuoteRequestStatus,
     SkillLevel,
 )
 
@@ -398,11 +400,94 @@ class PortfolioImage(BaseModel):
     def save(self, *args, **kwargs) -> None:
         with transaction.atomic():
             if self.is_cover:
-                PortfolioImage.objects.filter(provider_id=self.provider_id).exclude(pk=self.pk).update(
-                    is_cover=False
-                )
+                PortfolioImage.objects.filter(provider_id=self.provider_id).exclude(
+                    pk=self.pk
+                ).update(is_cover=False)
             super().save(*args, **kwargs)
 
     def set_as_cover(self) -> None:
         self.is_cover = True
         self.save(update_fields=["is_cover", "updated_at"])
+
+
+class QuoteRequest(BaseModel):
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="service_quote_requests",
+    )
+    customer_name = models.CharField(max_length=160)
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="quote_requests",
+    )
+    service_category = models.ForeignKey(
+        TradeCategory,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="quote_requests",
+    )
+    project_title = models.CharField(max_length=180)
+    project_description = models.TextField()
+    budget_range = models.CharField(max_length=120, blank=True)
+    preferred_contact_method = models.CharField(
+        max_length=20,
+        choices=PreferredContactMethod.choices,
+        default=PreferredContactMethod.PHONE,
+    )
+    phone = models.CharField(max_length=40)
+    email = models.EmailField()
+    property_address = models.TextField(blank=True)
+    state = models.CharField(max_length=80)
+    lga = models.CharField(max_length=120, blank=True)
+    preferred_start_date = models.DateField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=QuoteRequestStatus.choices,
+        default=QuoteRequestStatus.SUBMITTED,
+        db_index=True,
+    )
+    viewed_at = models.DateTimeField(null=True, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["customer", "created_at"]),
+            models.Index(fields=["state", "lga"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.project_title} for {self.provider.business_name}"
+
+    def mark_viewed(self) -> None:
+        if self.status == QuoteRequestStatus.SUBMITTED:
+            self.status = QuoteRequestStatus.VIEWED
+            self.viewed_at = timezone.now()
+            self.save(update_fields=["status", "viewed_at", "updated_at"])
+
+    def mark_responded(self) -> None:
+        if self.status in [QuoteRequestStatus.SUBMITTED, QuoteRequestStatus.VIEWED]:
+            self.status = QuoteRequestStatus.RESPONDED
+            self.responded_at = timezone.now()
+            if not self.viewed_at:
+                self.viewed_at = self.responded_at
+            self.save(update_fields=["status", "responded_at", "viewed_at", "updated_at"])
+
+    def close(self) -> None:
+        if self.status not in [QuoteRequestStatus.CLOSED, QuoteRequestStatus.CANCELLED]:
+            self.status = QuoteRequestStatus.CLOSED
+            self.closed_at = timezone.now()
+            self.save(update_fields=["status", "closed_at", "updated_at"])
+
+    def cancel(self) -> None:
+        if self.status not in [QuoteRequestStatus.CLOSED, QuoteRequestStatus.CANCELLED]:
+            self.status = QuoteRequestStatus.CANCELLED
+            self.closed_at = timezone.now()
+            self.save(update_fields=["status", "closed_at", "updated_at"])

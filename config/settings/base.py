@@ -129,6 +129,14 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_SERVICE_PORTFOLIO_UPLOAD_RATE",
             default="30/hour",
         ),
+        "service_quote_request_create": env(
+            "DRF_THROTTLE_SERVICE_QUOTE_REQUEST_CREATE_RATE",
+            default="10/hour",
+        ),
+        "service_quote_request_manage": env(
+            "DRF_THROTTLE_SERVICE_QUOTE_REQUEST_MANAGE_RATE",
+            default="120/hour",
+        ),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }

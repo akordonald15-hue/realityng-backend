@@ -32,3 +32,17 @@ class PortfolioImageStatus(models.TextChoices):
     ACTIVE = "active", "Active"
     PENDING_REVIEW = "pending_review", "Pending Review"
     REJECTED = "rejected", "Rejected"
+
+
+class QuoteRequestStatus(models.TextChoices):
+    SUBMITTED = "submitted", "Submitted"
+    VIEWED = "viewed", "Viewed"
+    RESPONDED = "responded", "Responded"
+    CLOSED = "closed", "Closed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class PreferredContactMethod(models.TextChoices):
+    PHONE = "phone", "Phone"
+    EMAIL = "email", "Email"
+    WHATSAPP = "whatsapp", "WhatsApp"

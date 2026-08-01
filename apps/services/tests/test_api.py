@@ -3,9 +3,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework import status
 
-from apps.accounts.models import AuditLog
-from apps.services.choices import ProviderStatus, ProviderType
-from apps.services.models import PortfolioImage, ProviderTrade, ServiceProvider
+from apps.accounts.models import AuditLog, UserRole
+from apps.services.choices import ProviderStatus, ProviderType, QuoteRequestStatus
+from apps.services.models import PortfolioImage, ProviderTrade, QuoteRequest, ServiceProvider
 
 
 @pytest.mark.django_db
@@ -354,3 +354,221 @@ def test_provider_cannot_manage_another_provider_trade(
     )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_anonymous_user_can_submit_quote_request(api_client, active_provider, electrical_category):
+    response = api_client.post(
+        reverse(
+            "service-provider-quote-request-create",
+            kwargs={"provider_slug": active_provider.slug},
+        ),
+        {
+            "service_category_id": str(electrical_category.id),
+            "customer_name": "Ada Buyer",
+            "project_title": "Fix inverter wiring",
+            "project_description": "The inverter trips when the generator comes on.",
+            "budget_range": "NGN 100,000 - 250,000",
+            "preferred_contact_method": "whatsapp",
+            "phone": "+2348090000000",
+            "email": "ada@example.com",
+            "property_address": "Lekki Phase 1",
+            "state": "Lagos",
+            "lga": "Eti-Osa",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    quote_request = QuoteRequest.objects.get(project_title="Fix inverter wiring")
+    assert quote_request.customer is None
+    assert quote_request.provider == active_provider
+    assert quote_request.status == QuoteRequestStatus.SUBMITTED
+    assert AuditLog.objects.filter(action="service_quote.submitted").exists()
+
+
+@pytest.mark.django_db
+def test_anonymous_quote_request_requires_contact_identity(api_client, active_provider):
+    response = api_client.post(
+        reverse(
+            "service-provider-quote-request-create",
+            kwargs={"provider_slug": active_provider.slug},
+        ),
+        {
+            "project_title": "Repair plumbing",
+            "project_description": "Leak under the kitchen sink.",
+            "preferred_contact_method": "email",
+            "state": "Lagos",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "customer_name" in response.data
+    assert "phone" in response.data
+    assert "email" in response.data
+
+
+@pytest.mark.django_db
+def test_logged_in_quote_request_autofills_customer(api_client, active_provider, other_user):
+    other_user.phone_number = "+2348011112222"
+    other_user.first_name = "Ada"
+    other_user.last_name = "Customer"
+    other_user.save(update_fields=["phone_number", "first_name", "last_name", "updated_at"])
+    api_client.force_authenticate(user=other_user)
+
+    response = api_client.post(
+        reverse(
+            "service-provider-quote-request-create",
+            kwargs={"provider_slug": active_provider.slug},
+        ),
+        {
+            "project_title": "Install new sockets",
+            "project_description": "Need extra wall sockets in two bedrooms.",
+            "preferred_contact_method": "phone",
+            "state": "Lagos",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    quote_request = QuoteRequest.objects.get(project_title="Install new sockets")
+    assert quote_request.customer == other_user
+    assert quote_request.customer_name == other_user.full_name
+    assert quote_request.phone == other_user.phone_number
+    assert quote_request.email == other_user.email
+
+
+@pytest.mark.django_db
+def test_quote_request_rejects_inactive_provider(api_client, user):
+    draft_provider = ServiceProvider.objects.create(
+        user=user,
+        provider_type=ProviderType.INDIVIDUAL,
+        business_name="Draft Provider",
+        country="Nigeria",
+        state="Lagos",
+        city="Lagos",
+        status=ProviderStatus.DRAFT,
+    )
+
+    response = api_client.post(
+        reverse(
+            "service-provider-quote-request-create",
+            kwargs={"provider_slug": draft_provider.slug},
+        ),
+        {
+            "customer_name": "Ada Buyer",
+            "project_title": "Paint apartment",
+            "project_description": "Need painting estimate.",
+            "preferred_contact_method": "email",
+            "phone": "+2348090000000",
+            "email": "ada@example.com",
+            "state": "Lagos",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert QuoteRequest.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_provider_can_list_and_manage_own_quote_requests(api_client, active_provider):
+    quote_request = QuoteRequest.objects.create(
+        provider=active_provider,
+        service_category=active_provider.trades.get(is_primary=True).category,
+        customer_name="Ada Buyer",
+        project_title="Service request",
+        project_description="Need a quotation.",
+        preferred_contact_method="phone",
+        phone="+2348090000000",
+        email="ada@example.com",
+        state="Lagos",
+    )
+    api_client.force_authenticate(user=active_provider.user)
+
+    list_response = api_client.get(reverse("service-provider-profile-quote-requests-list"))
+    assert list_response.status_code == status.HTTP_200_OK
+    assert list_response.data["results"][0]["id"] == str(quote_request.id)
+
+    viewed_response = api_client.post(
+        reverse("service-provider-profile-quote-requests-mark-viewed", args=[quote_request.id])
+    )
+    assert viewed_response.status_code == status.HTTP_200_OK
+    assert viewed_response.data["status"] == QuoteRequestStatus.VIEWED
+
+    responded_response = api_client.post(
+        reverse("service-provider-profile-quote-requests-mark-responded", args=[quote_request.id])
+    )
+    assert responded_response.status_code == status.HTTP_200_OK
+    assert responded_response.data["status"] == QuoteRequestStatus.RESPONDED
+
+    closed_response = api_client.post(
+        reverse("service-provider-profile-quote-requests-close-request", args=[quote_request.id])
+    )
+    assert closed_response.status_code == status.HTTP_200_OK
+    assert closed_response.data["status"] == QuoteRequestStatus.CLOSED
+
+
+@pytest.mark.django_db
+def test_provider_cannot_access_another_provider_quote_request(
+    api_client,
+    active_provider,
+    other_user,
+    artisan_role,
+):
+    UserRole.objects.create(user=other_user, role=artisan_role, status="approved")
+    other_provider = ServiceProvider.objects.create(
+        user=other_user,
+        provider_type=ProviderType.INDIVIDUAL,
+        business_name="Other Provider",
+        country="Nigeria",
+        state="Abuja",
+        city="Abuja",
+        status=ProviderStatus.ACTIVE,
+    )
+    quote_request = QuoteRequest.objects.create(
+        provider=active_provider,
+        customer_name="Ada Buyer",
+        project_title="Private request",
+        project_description="Do not expose this.",
+        preferred_contact_method="email",
+        phone="+2348090000000",
+        email="ada@example.com",
+        state="Lagos",
+    )
+    api_client.force_authenticate(user=other_provider.user)
+
+    response = api_client.get(
+        reverse("service-provider-profile-quote-requests-detail", args=[quote_request.id])
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_admin_can_filter_and_close_quote_requests(api_client, admin_user, active_provider):
+    quote_request = QuoteRequest.objects.create(
+        provider=active_provider,
+        customer_name="Ada Buyer",
+        project_title="Admin visible request",
+        project_description="Needs moderation visibility.",
+        preferred_contact_method="email",
+        phone="+2348090000000",
+        email="ada@example.com",
+        state="Lagos",
+    )
+    api_client.force_authenticate(user=admin_user)
+
+    list_response = api_client.get(
+        reverse("service-admin-quote-requests-list"),
+        {"status": QuoteRequestStatus.SUBMITTED, "search": "visible"},
+    )
+    assert list_response.status_code == status.HTTP_200_OK
+    assert list_response.data["count"] == 1
+
+    close_response = api_client.post(
+        reverse("service-admin-quote-requests-close-request", args=[quote_request.id])
+    )
+    assert close_response.status_code == status.HTTP_200_OK
+    assert close_response.data["status"] == QuoteRequestStatus.CLOSED

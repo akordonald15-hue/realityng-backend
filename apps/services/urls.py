@@ -2,13 +2,16 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from apps.services.views import (
+    AdminQuoteRequestViewSet,
     AdminServiceProviderViewSet,
     PortfolioImageManagementViewSet,
     ProviderProfileDeactivateView,
     ProviderProfileMeView,
     ProviderProfileSubmitView,
     ProviderProfileView,
+    ProviderQuoteRequestViewSet,
     ProviderTradeManagementViewSet,
+    PublicQuoteRequestCreateViewSet,
     PublicServiceProviderViewSet,
     ServiceAreaManagementViewSet,
     TradeCategoryViewSet,
@@ -37,8 +40,23 @@ router.register(
     AdminServiceProviderViewSet,
     basename="service-admin-providers",
 )
+router.register(
+    "services/provider-profile/quote-requests",
+    ProviderQuoteRequestViewSet,
+    basename="service-provider-profile-quote-requests",
+)
+router.register(
+    "services/admin/quote-requests",
+    AdminQuoteRequestViewSet,
+    basename="service-admin-quote-requests",
+)
 
 urlpatterns = [
+    path(
+        "services/providers/<slug:provider_slug>/quote-requests/",
+        PublicQuoteRequestCreateViewSet.as_view({"post": "create"}),
+        name="service-provider-quote-request-create",
+    ),
     path(
         "services/provider-profile/",
         ProviderProfileView.as_view(),
