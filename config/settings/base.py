@@ -70,6 +70,7 @@ LOCAL_APPS = [
     "apps.trust",
     "apps.assistant",
     "apps.services",
+    "apps.notifications",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
