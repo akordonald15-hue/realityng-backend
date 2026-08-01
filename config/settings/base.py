@@ -125,6 +125,10 @@ REST_FRAMEWORK = {
         "viewing_create": env("DRF_THROTTLE_VIEWING_CREATE_RATE", default="20/hour"),
         "application_create": env("DRF_THROTTLE_APPLICATION_CREATE_RATE", default="10/hour"),
         "property_upload": env("DRF_THROTTLE_PROPERTY_UPLOAD_RATE", default="30/hour"),
+        "service_portfolio_upload": env(
+            "DRF_THROTTLE_SERVICE_PORTFOLIO_UPLOAD_RATE",
+            default="30/hour",
+        ),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
@@ -182,6 +186,16 @@ PROPERTY_IMAGE_ALLOWED_TYPES = env.list(
 PROPERTY_IMAGE_ALLOWED_EXTENSIONS = env.list(
     "PROPERTY_IMAGE_ALLOWED_EXTENSIONS",
     default=[".jpg", ".jpeg", ".png", ".webp"],
+)
+SERVICE_PORTFOLIO_IMAGE_MAX_COUNT = env.int("SERVICE_PORTFOLIO_IMAGE_MAX_COUNT", default=20)
+SERVICE_PORTFOLIO_IMAGE_MAX_SIZE_MB = env.int("SERVICE_PORTFOLIO_IMAGE_MAX_SIZE_MB", default=10)
+SERVICE_PORTFOLIO_IMAGE_ALLOWED_TYPES = env.list(
+    "SERVICE_PORTFOLIO_IMAGE_ALLOWED_TYPES",
+    default=PROPERTY_IMAGE_ALLOWED_TYPES,
+)
+SERVICE_PORTFOLIO_IMAGE_ALLOWED_EXTENSIONS = env.list(
+    "SERVICE_PORTFOLIO_IMAGE_ALLOWED_EXTENSIONS",
+    default=PROPERTY_IMAGE_ALLOWED_EXTENSIONS,
 )
 
 VERIFICATION_DOCUMENT_MAX_SIZE_MB = env.int("VERIFICATION_DOCUMENT_MAX_SIZE_MB", default=10)

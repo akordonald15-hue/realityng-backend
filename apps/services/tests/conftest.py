@@ -1,7 +1,12 @@
+from io import BytesIO
+
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+from PIL import Image
 from rest_framework.test import APIClient
 
-from apps.accounts.models import User
+from apps.accounts.choices import RoleName, UserRoleStatus
+from apps.accounts.models import Role, User, UserRole
 from apps.services.choices import ProviderStatus, ProviderType, SkillLevel
 from apps.services.models import ProviderTrade, ServiceArea, ServiceProvider, TradeCategory
 
@@ -39,6 +44,32 @@ def admin_user(db):
 
 
 @pytest.fixture
+def artisan_role(db):
+    return Role.objects.get(name=RoleName.ARTISAN)
+
+
+@pytest.fixture
+def approved_artisan_user(user, artisan_role):
+    UserRole.objects.create(
+        user=user,
+        role=artisan_role,
+        status=UserRoleStatus.APPROVED,
+    )
+    return user
+
+
+@pytest.fixture
+def test_image_file():
+    def _make_image(name="portfolio.jpg", image_format="JPEG", content_type="image/jpeg"):
+        image = Image.new("RGB", (16, 16), color=(32, 96, 160))
+        buffer = BytesIO()
+        image.save(buffer, format=image_format)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type=content_type)
+
+    return _make_image
+
+
+@pytest.fixture
 def electrical_category(db):
     return TradeCategory.objects.get(slug="electrical")
 
@@ -49,7 +80,12 @@ def plumbing_category(db):
 
 
 @pytest.fixture
-def active_provider(user, electrical_category):
+def active_provider(user, artisan_role, electrical_category):
+    UserRole.objects.create(
+        user=user,
+        role=artisan_role,
+        status=UserRoleStatus.APPROVED,
+    )
     provider = ServiceProvider.objects.create(
         user=user,
         provider_type=ProviderType.INDIVIDUAL,

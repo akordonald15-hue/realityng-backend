@@ -1,10 +1,38 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from django.conf import settings
 from drf_spectacular.utils import extend_schema_field
+from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
-from apps.services.choices import ProviderStatus, ProviderTradeStatus
-from apps.services.models import ProviderTrade, ServiceArea, ServiceProvider, TradeCategory
+from apps.properties.serializers import build_media_url
+from apps.services.choices import (
+    PortfolioImageStatus,
+    ProviderStatus,
+    ProviderTradeStatus,
+)
+from apps.services.models import (
+    PortfolioImage,
+    ProviderTrade,
+    ServiceArea,
+    ServiceProvider,
+    TradeCategory,
+)
+
+EDITABLE_WITHOUT_REVIEW = {"headline", "biography", "phone", "email"}
+MODERATION_SENSITIVE_FIELDS = {
+    "provider_type",
+    "business_name",
+    "country",
+    "state",
+    "city",
+    "lga",
+    "neighborhood",
+    "display_location",
+    "private_address",
+}
 
 
 class TradeCategorySerializer(serializers.ModelSerializer):
@@ -62,8 +90,30 @@ class ServiceAreaSerializer(serializers.ModelSerializer):
             "lga",
             "neighborhood",
             "service_radius_km",
+            "is_primary",
         ]
         read_only_fields = fields
+
+
+class PortfolioImagePublicSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    category = TradeCategorySerializer(read_only=True)
+
+    class Meta:
+        model = PortfolioImage
+        fields = [
+            "id",
+            "image_url",
+            "caption",
+            "category",
+            "display_order",
+            "is_cover",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_image_url(self, obj: PortfolioImage) -> str:
+        return build_media_url(obj.image, self.context.get("request"))
 
 
 class PublicServiceProviderListSerializer(serializers.ModelSerializer):
@@ -72,6 +122,8 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
     service_areas = ServiceAreaSerializer(many=True, read_only=True)
     display_location = serializers.CharField(source="public_display_location", read_only=True)
     verification_badges = serializers.SerializerMethodField()
+    cover_image_url = serializers.SerializerMethodField()
+    portfolio_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ServiceProvider
@@ -96,34 +148,32 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
             "trades",
             "primary_trade",
             "service_areas",
+            "cover_image_url",
+            "portfolio_count",
             "created_at",
         ]
         read_only_fields = fields
 
-    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
-    def get_trades(self, obj):
-        trades = [
+    def _active_trades(self, obj):
+        return [
             trade
             for trade in obj.trades.all()
             if trade.status == ProviderTradeStatus.ACTIVE
             and trade.category.is_active
             and not trade.category.deleted_at
         ]
-        return ProviderTradeSerializer(trades, many=True, context=self.context).data
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_trades(self, obj):
+        return ProviderTradeSerializer(
+            self._active_trades(obj),
+            many=True,
+            context=self.context,
+        ).data
 
     @extend_schema_field(serializers.DictField(allow_null=True))
     def get_primary_trade(self, obj):
-        primary = next(
-            (
-                trade
-                for trade in obj.trades.all()
-                if trade.is_primary
-                and trade.status == ProviderTradeStatus.ACTIVE
-                and trade.category.is_active
-                and not trade.category.deleted_at
-            ),
-            None,
-        )
+        primary = next((trade for trade in self._active_trades(obj) if trade.is_primary), None)
         return ProviderTradeSerializer(primary, context=self.context).data if primary else None
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
@@ -133,6 +183,26 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
         if isinstance(badges, list):
             return badges
         return []
+
+    def get_cover_image_url(self, obj: ServiceProvider) -> str:
+        image = next(
+            (
+                item
+                for item in obj.portfolio_images.all()
+                if item.is_cover and item.status == PortfolioImageStatus.ACTIVE
+            ),
+            None,
+        )
+        return build_media_url(image.image, self.context.get("request")) if image else ""
+
+    def get_portfolio_count(self, obj: ServiceProvider) -> int:
+        return len(
+            [
+                item
+                for item in obj.portfolio_images.all()
+                if item.status == PortfolioImageStatus.ACTIVE and not item.deleted_at
+            ]
+        )
 
 
 class PublicServiceProviderDetailSerializer(PublicServiceProviderListSerializer):
@@ -147,9 +217,21 @@ class PublicServiceProviderDetailSerializer(PublicServiceProviderListSerializer)
 
     @extend_schema_field(serializers.DictField())
     def get_portfolio(self, obj):
+        items = [
+            item
+            for item in obj.portfolio_images.all()
+            if item.status == PortfolioImageStatus.ACTIVE and not item.deleted_at
+        ]
         return {
-            "items": [],
-            "message": "Portfolio uploads will be available in Sprint 9.2.",
+            "items": PortfolioImagePublicSerializer(
+                items,
+                many=True,
+                context=self.context,
+            ).data,
+            "message": (
+                "Portfolio images are supplied by the provider and remain subject to "
+                "RealityNG moderation."
+            ),
         }
 
     @extend_schema_field(serializers.DictField())
@@ -162,9 +244,373 @@ class PublicServiceProviderDetailSerializer(PublicServiceProviderListSerializer)
         }
 
 
+class ServiceProviderOwnerSerializer(serializers.ModelSerializer):
+    trades = ProviderTradeSerializer(many=True, read_only=True)
+    service_areas = ServiceAreaSerializer(many=True, read_only=True)
+    portfolio_count = serializers.SerializerMethodField()
+    completion = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceProvider
+        fields = [
+            "id",
+            "slug",
+            "provider_type",
+            "business_name",
+            "headline",
+            "biography",
+            "phone",
+            "email",
+            "country",
+            "state",
+            "city",
+            "lga",
+            "neighborhood",
+            "private_address",
+            "display_location",
+            "verification_snapshot",
+            "average_rating",
+            "completed_jobs_count",
+            "status",
+            "published_at",
+            "submitted_at",
+            "reviewed_at",
+            "review_notes",
+            "rejection_reason",
+            "more_info_message",
+            "suspended_reason",
+            "trades",
+            "service_areas",
+            "portfolio_count",
+            "completion",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "slug",
+            "verification_snapshot",
+            "average_rating",
+            "completed_jobs_count",
+            "status",
+            "published_at",
+            "submitted_at",
+            "reviewed_at",
+            "review_notes",
+            "rejection_reason",
+            "more_info_message",
+            "suspended_reason",
+            "trades",
+            "service_areas",
+            "portfolio_count",
+            "completion",
+            "created_at",
+            "updated_at",
+        ]
+
+    @extend_schema_field(serializers.DictField())
+    def get_completion(self, obj):
+        return validate_provider_submission(obj)
+
+    def get_portfolio_count(self, obj) -> int:
+        return obj.portfolio_images.count()
+
+    def validate(self, attrs: dict) -> dict:
+        instance = self.instance
+        if instance and instance.status == ProviderStatus.PENDING_REVIEW:
+            raise serializers.ValidationError(
+                {"status": ["Profiles under review cannot be edited until reviewed."]}
+            )
+        if instance and instance.status == ProviderStatus.SUSPENDED:
+            raise serializers.ValidationError(
+                {"status": ["Suspended profiles cannot be edited. Contact support."]}
+            )
+        if instance and instance.status == ProviderStatus.ACTIVE:
+            sensitive = set(attrs) & MODERATION_SENSITIVE_FIELDS
+            if sensitive:
+                raise serializers.ValidationError(
+                    {
+                        "fields": [
+                            "This active-profile field requires moderation before editing."
+                        ],
+                    }
+                )
+        return attrs
+
+
+class ProviderTradeWriteSerializer(serializers.ModelSerializer):
+    category_id = serializers.UUIDField(write_only=True)
+    category = TradeCategorySerializer(read_only=True)
+
+    class Meta:
+        model = ProviderTrade
+        fields = [
+            "id",
+            "category",
+            "category_id",
+            "is_primary",
+            "years_experience",
+            "skill_level",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "category", "status", "created_at", "updated_at"]
+
+    def validate_category_id(self, value):
+        try:
+            category = TradeCategory.objects.get(id=value, is_active=True)
+        except TradeCategory.DoesNotExist as exc:
+            raise serializers.ValidationError("Select an active service category.") from exc
+        self.context["category"] = category
+        return value
+
+    def validate(self, attrs):
+        provider = self.context["provider"]
+        category = self.context.get("category") or getattr(self.instance, "category", None)
+        if self.instance is None and category:
+            if ProviderTrade.objects.filter(provider=provider, category=category).exists():
+                raise serializers.ValidationError(
+                    {"category_id": ["This category is already selected."]}
+                )
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("category_id", None)
+        return ProviderTrade.objects.create(
+            provider=self.context["provider"],
+            category=self.context["category"],
+            **validated_data,
+        )
+
+    def update(self, instance, validated_data):
+        if "category_id" in validated_data:
+            validated_data.pop("category_id", None)
+            instance.category = self.context["category"]
+        return super().update(instance, validated_data)
+
+
+class ServiceAreaWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceArea
+        fields = [
+            "id",
+            "country",
+            "state",
+            "city",
+            "lga",
+            "neighborhood",
+            "service_radius_km",
+            "is_primary",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_service_radius_km(self, value):
+        if value is not None and (value < 1 or value > 100):
+            raise serializers.ValidationError("Service radius must be between 1 and 100km.")
+        return value
+
+
+class PortfolioImageSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    image = serializers.ImageField(write_only=True, required=True)
+    category = TradeCategorySerializer(read_only=True)
+    category_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = PortfolioImage
+        fields = [
+            "id",
+            "image",
+            "image_url",
+            "caption",
+            "category",
+            "category_id",
+            "display_order",
+            "is_cover",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "image_url", "status", "created_at", "updated_at"]
+
+    def get_image_url(self, obj: PortfolioImage) -> str:
+        return build_media_url(obj.image, self.context.get("request"))
+
+    def validate_category_id(self, value):
+        if value is None:
+            return value
+        try:
+            category = TradeCategory.objects.get(id=value, is_active=True)
+        except TradeCategory.DoesNotExist as exc:
+            raise serializers.ValidationError("Select an active service category.") from exc
+        self.context["category"] = category
+        return value
+
+    def validate_image(self, value):
+        allowed_types = set(settings.SERVICE_PORTFOLIO_IMAGE_ALLOWED_TYPES)
+        content_type = getattr(value, "content_type", "")
+        if content_type not in allowed_types:
+            allowed = ", ".join(sorted(allowed_types))
+            raise serializers.ValidationError(f"Image must be one of: {allowed}.")
+
+        allowed_extensions = {
+            extension.lower() for extension in settings.SERVICE_PORTFOLIO_IMAGE_ALLOWED_EXTENSIONS
+        }
+        extension = Path(value.name).suffix.lower()
+        if extension not in allowed_extensions:
+            allowed = ", ".join(sorted(allowed_extensions))
+            raise serializers.ValidationError(f"Image extension must be one of: {allowed}.")
+
+        max_size = settings.SERVICE_PORTFOLIO_IMAGE_MAX_SIZE_MB * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                f"Image must be {settings.SERVICE_PORTFOLIO_IMAGE_MAX_SIZE_MB}MB or smaller."
+            )
+
+        try:
+            image = Image.open(value)
+            image.verify()
+        except (UnidentifiedImageError, OSError) as exc:
+            raise serializers.ValidationError("Uploaded file must be a valid image.") from exc
+        finally:
+            value.seek(0)
+        return value
+
+    def validate(self, attrs):
+        provider = self.context["provider"]
+        image_count = provider.portfolio_images.count()
+        if self.instance is None and image_count >= settings.SERVICE_PORTFOLIO_IMAGE_MAX_COUNT:
+            raise serializers.ValidationError(
+                {
+                    "image": [
+                        f"A provider can have at most "
+                        f"{settings.SERVICE_PORTFOLIO_IMAGE_MAX_COUNT} portfolio images."
+                    ]
+                }
+            )
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("category_id", None)
+        if "category" in self.context:
+            validated_data["category"] = self.context["category"]
+        provider = self.context["provider"]
+        if not provider.portfolio_images.exists():
+            validated_data["is_cover"] = True
+        return PortfolioImage.objects.create(provider=provider, **validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop("image", None)
+        if "category_id" in validated_data:
+            validated_data.pop("category_id", None)
+            instance.category = self.context.get("category")
+        return super().update(instance, validated_data)
+
+
+class PortfolioImageMetadataSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    category = TradeCategorySerializer(read_only=True)
+    category_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = PortfolioImage
+        fields = [
+            "id",
+            "image_url",
+            "caption",
+            "category",
+            "category_id",
+            "display_order",
+            "is_cover",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "image_url", "status", "created_at", "updated_at"]
+
+    def get_image_url(self, obj: PortfolioImage) -> str:
+        return build_media_url(obj.image, self.context.get("request"))
+
+    def validate_category_id(self, value):
+        if value is None:
+            return value
+        try:
+            category = TradeCategory.objects.get(id=value, is_active=True)
+        except TradeCategory.DoesNotExist as exc:
+            raise serializers.ValidationError("Select an active service category.") from exc
+        self.context["category"] = category
+        return value
+
+    def update(self, instance, validated_data):
+        if "category_id" in validated_data:
+            validated_data.pop("category_id", None)
+            instance.category = self.context.get("category")
+        return super().update(instance, validated_data)
+
+
+class PortfolioReorderSerializer(serializers.Serializer):
+    items = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=False,
+    )
+
+    def validate_items(self, value):
+        for item in value:
+            if "id" not in item or "display_order" not in item:
+                raise serializers.ValidationError("Each item needs id and display_order.")
+        return value
+
+
+class AdminServiceProviderSerializer(ServiceProviderOwnerSerializer):
+    reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True)
+
+    class Meta(ServiceProviderOwnerSerializer.Meta):
+        fields = ServiceProviderOwnerSerializer.Meta.fields + ["reviewed_by_email"]
+        read_only_fields = ServiceProviderOwnerSerializer.Meta.read_only_fields + [
+            "reviewed_by_email"
+        ]
+
+
+class AdminDecisionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True)
+    message = serializers.CharField(required=False, allow_blank=True)
+    review_notes = serializers.CharField(required=False, allow_blank=True)
+
+
+def validate_provider_submission(provider: ServiceProvider) -> dict:
+    missing: list[str] = []
+    if not provider.provider_type:
+        missing.append("provider_type")
+    if not provider.business_name:
+        missing.append("business_name")
+    if not provider.headline:
+        missing.append("headline")
+    if not provider.biography:
+        missing.append("biography")
+    if not provider.phone and not provider.email:
+        missing.append("contact")
+    if not provider.trades.filter(status=ProviderTradeStatus.ACTIVE, is_primary=True).exists():
+        missing.append("primary_trade")
+    if not provider.service_areas.exists():
+        missing.append("service_area")
+
+    return {
+        "is_complete": not missing,
+        "missing": missing,
+        "message": (
+            "Profile is ready for review."
+            if not missing
+            else "Complete the missing items before submitting."
+        ),
+    }
+
+
 def active_public_provider_queryset():
     return (
         ServiceProvider.objects.filter(status=ProviderStatus.ACTIVE)
         .select_related("user")
-        .prefetch_related("trades__category", "service_areas")
+        .prefetch_related("trades__category", "service_areas", "portfolio_images__category")
     )

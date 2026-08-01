@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.common.models import BaseModel
-from apps.services.choices import ProviderStatus, ProviderTradeStatus, ProviderType, SkillLevel
+from apps.services.choices import (
+    PortfolioImageStatus,
+    ProviderStatus,
+    ProviderTradeStatus,
+    ProviderType,
+    SkillLevel,
+)
+
+
+def portfolio_image_upload_to(instance: PortfolioImage, filename: str) -> str:
+    return f"services/{instance.provider_id}/portfolio/{filename}"
 
 
 class TradeCategory(BaseModel):
@@ -95,6 +106,19 @@ class ServiceProvider(BaseModel):
         default=ProviderStatus.DRAFT,
     )
     published_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_service_providers",
+    )
+    review_notes = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+    more_info_message = models.TextField(blank=True)
+    suspended_reason = models.TextField(blank=True)
 
     class Meta:
         ordering = ["business_name"]
@@ -135,6 +159,99 @@ class ServiceProvider(BaseModel):
             return self.display_location
         parts = [self.neighborhood, self.city, self.state]
         return ", ".join(part for part in parts if part)
+
+    def submit_for_review(self) -> None:
+        self.status = ProviderStatus.PENDING_REVIEW
+        self.submitted_at = timezone.now()
+        self.save(update_fields=["status", "submitted_at", "updated_at"])
+
+    def approve(self, *, reviewer) -> None:
+        self.status = ProviderStatus.ACTIVE
+        self.published_at = timezone.now()
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.rejection_reason = ""
+        self.more_info_message = ""
+        self.suspended_reason = ""
+        self.save(
+            update_fields=[
+                "status",
+                "published_at",
+                "reviewed_at",
+                "reviewed_by",
+                "rejection_reason",
+                "more_info_message",
+                "suspended_reason",
+                "updated_at",
+            ]
+        )
+
+    def reject(self, *, reviewer, reason: str) -> None:
+        self.status = ProviderStatus.REJECTED
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.rejection_reason = reason
+        self.save(
+            update_fields=[
+                "status",
+                "reviewed_at",
+                "reviewed_by",
+                "rejection_reason",
+                "updated_at",
+            ]
+        )
+
+    def request_more_information(self, *, reviewer, message: str) -> None:
+        self.status = ProviderStatus.NEEDS_MORE_INFORMATION
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.more_info_message = message
+        self.save(
+            update_fields=[
+                "status",
+                "reviewed_at",
+                "reviewed_by",
+                "more_info_message",
+                "updated_at",
+            ]
+        )
+
+    def suspend(self, *, reviewer, reason: str) -> None:
+        self.status = ProviderStatus.SUSPENDED
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.suspended_reason = reason
+        self.save(
+            update_fields=[
+                "status",
+                "reviewed_at",
+                "reviewed_by",
+                "suspended_reason",
+                "updated_at",
+            ]
+        )
+
+    def reactivate(self, *, reviewer) -> None:
+        self.status = ProviderStatus.ACTIVE
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.suspended_reason = ""
+        if not self.published_at:
+            self.published_at = timezone.now()
+        self.save(
+            update_fields=[
+                "status",
+                "reviewed_at",
+                "reviewed_by",
+                "suspended_reason",
+                "published_at",
+                "updated_at",
+            ]
+        )
+
+    def deactivate(self) -> None:
+        self.status = ProviderStatus.INACTIVE
+        self.save(update_fields=["status", "updated_at"])
 
 
 class ProviderTrade(BaseModel):
@@ -184,6 +301,14 @@ class ProviderTrade(BaseModel):
     def __str__(self) -> str:
         return f"{self.provider.business_name} - {self.category.name}"
 
+    def save(self, *args, **kwargs) -> None:
+        with transaction.atomic():
+            if self.is_primary:
+                ProviderTrade.objects.filter(provider_id=self.provider_id).exclude(pk=self.pk).update(
+                    is_primary=False
+                )
+            super().save(*args, **kwargs)
+
 
 class ServiceArea(BaseModel):
     provider = models.ForeignKey(
@@ -197,6 +322,7 @@ class ServiceArea(BaseModel):
     lga = models.CharField(max_length=120, blank=True)
     neighborhood = models.CharField(max_length=160, blank=True)
     service_radius_km = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_primary = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["state", "city", "lga", "neighborhood"]
@@ -205,8 +331,78 @@ class ServiceArea(BaseModel):
             models.Index(fields=["state", "city"]),
             models.Index(fields=["lga"]),
             models.Index(fields=["neighborhood"]),
+            models.Index(fields=["provider", "is_primary"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider"],
+                condition=Q(is_primary=True, deleted_at__isnull=True),
+                name="unique_primary_service_area_per_provider",
+            ),
         ]
 
     def __str__(self) -> str:
         parts = [self.neighborhood, self.lga, self.city, self.state]
         return ", ".join(part for part in parts if part)
+
+    def save(self, *args, **kwargs) -> None:
+        with transaction.atomic():
+            if self.is_primary:
+                ServiceArea.objects.filter(provider_id=self.provider_id).exclude(pk=self.pk).update(
+                    is_primary=False
+                )
+            super().save(*args, **kwargs)
+
+
+class PortfolioImage(BaseModel):
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.CASCADE,
+        related_name="portfolio_images",
+    )
+    image = models.ImageField(upload_to=portfolio_image_upload_to)
+    caption = models.CharField(max_length=180, blank=True)
+    category = models.ForeignKey(
+        TradeCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="portfolio_images",
+    )
+    display_order = models.PositiveSmallIntegerField(default=0)
+    is_cover = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=20,
+        choices=PortfolioImageStatus.choices,
+        default=PortfolioImageStatus.ACTIVE,
+    )
+
+    class Meta:
+        ordering = ["display_order", "created_at"]
+        indexes = [
+            models.Index(fields=["provider", "display_order"]),
+            models.Index(fields=["provider", "is_cover"]),
+            models.Index(fields=["provider", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider"],
+                condition=Q(is_cover=True, deleted_at__isnull=True),
+                name="unique_cover_portfolio_image_per_provider",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.provider.business_name} portfolio image"
+
+    def save(self, *args, **kwargs) -> None:
+        with transaction.atomic():
+            if self.is_cover:
+                PortfolioImage.objects.filter(provider_id=self.provider_id).exclude(pk=self.pk).update(
+                    is_cover=False
+                )
+            super().save(*args, **kwargs)
+
+    def set_as_cover(self) -> None:
+        self.is_cover = True
+        self.save(update_fields=["is_cover", "updated_at"])

@@ -1,8 +1,13 @@
 import pytest
-from django.db import IntegrityError
 
 from apps.services.choices import ProviderStatus, ProviderType
-from apps.services.models import ProviderTrade, ServiceProvider, TradeCategory
+from apps.services.models import (
+    PortfolioImage,
+    ProviderTrade,
+    ServiceArea,
+    ServiceProvider,
+    TradeCategory,
+)
 
 
 @pytest.mark.django_db
@@ -39,18 +44,50 @@ def test_service_provider_slug_is_unique(user, other_user):
 
 @pytest.mark.django_db
 def test_provider_can_only_have_one_primary_trade(active_provider, plumbing_category):
-    ProviderTrade.objects.create(
+    first = active_provider.trades.get(is_primary=True)
+    second = ProviderTrade.objects.create(
         provider=active_provider,
         category=plumbing_category,
-        is_primary=False,
+        is_primary=True,
     )
 
-    with pytest.raises(IntegrityError):
-        ProviderTrade.objects.create(
-            provider=active_provider,
-            category=TradeCategory.objects.get(slug="painting"),
-            is_primary=True,
-        )
+    first.refresh_from_db()
+    assert second.is_primary is True
+    assert first.is_primary is False
+
+
+@pytest.mark.django_db
+def test_provider_can_only_have_one_primary_service_area(active_provider):
+    first = active_provider.service_areas.get(is_primary=False)
+    second = ServiceArea.objects.create(
+        provider=active_provider,
+        country="Nigeria",
+        state="Lagos",
+        city="Ikeja",
+        is_primary=True,
+    )
+
+    first.refresh_from_db()
+    assert second.is_primary is True
+    assert first.is_primary is False
+
+
+@pytest.mark.django_db
+def test_provider_can_only_have_one_cover_portfolio_image(active_provider, test_image_file):
+    first = PortfolioImage.objects.create(
+        provider=active_provider,
+        image=test_image_file("first.jpg"),
+        is_cover=True,
+    )
+    second = PortfolioImage.objects.create(
+        provider=active_provider,
+        image=test_image_file("second.jpg"),
+        is_cover=True,
+    )
+
+    first.refresh_from_db()
+    assert second.is_cover is True
+    assert first.is_cover is False
 
 
 @pytest.mark.django_db
