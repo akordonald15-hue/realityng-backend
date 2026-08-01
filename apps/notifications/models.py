@@ -41,3 +41,20 @@ class Notification(BaseModel):
     @property
     def is_read(self) -> bool:
         return self.read_at is not None
+
+class NotificationPreference(BaseModel):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preference",
+    )
+    in_app_enabled = models.BooleanField(default=True)
+    email_enabled = models.BooleanField(default=True)
+    lead_notifications = models.BooleanField(default=True)
+    viewing_notifications = models.BooleanField(default=True)
+    application_notifications = models.BooleanField(default=True)
+    message_notifications = models.BooleanField(default=True)
+
+    def __str__(self) -> str:
+        return f"NotificationPreference<{self.user_id}>"
+
