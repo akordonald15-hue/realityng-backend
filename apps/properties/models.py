@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
@@ -12,6 +13,9 @@ from apps.properties.choices import (
     GeocodingStatus,
     InquiryStatus,
     InquiryType,
+    LeadActivityType,
+    LeadPipelineStage,
+    LeadPriority,
     ListingType,
     LocationPrecision,
     PropertyStatus,
@@ -234,6 +238,41 @@ class Inquiry(BaseModel):
         InquiryStatus.CLOSED: set(),
     }
 
+    VALID_PIPELINE_TRANSITIONS = {
+        LeadPipelineStage.NEW: {
+            LeadPipelineStage.CONTACTED,
+            LeadPipelineStage.QUALIFIED,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.CONTACTED: {
+            LeadPipelineStage.QUALIFIED,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.QUALIFIED: {
+            LeadPipelineStage.VIEWING_SCHEDULED,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.VIEWING_SCHEDULED: {
+            LeadPipelineStage.APPLICATION_STARTED,
+            LeadPipelineStage.NEGOTIATING,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.APPLICATION_STARTED: {
+            LeadPipelineStage.APPLICATION_SUBMITTED,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.APPLICATION_SUBMITTED: {
+            LeadPipelineStage.NEGOTIATING,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.NEGOTIATING: {
+            LeadPipelineStage.CONVERTED,
+            LeadPipelineStage.CLOSED_LOST,
+        },
+        LeadPipelineStage.CONVERTED: set(),
+        LeadPipelineStage.CLOSED_LOST: set(),
+    }
+
     property = models.ForeignKey(
         Property,
         on_delete=models.PROTECT,
@@ -263,6 +302,33 @@ class Inquiry(BaseModel):
     )
     internal_notes = models.TextField(blank=True)
 
+    pipeline_stage = models.CharField(
+        max_length=32,
+        choices=LeadPipelineStage.choices,
+        default=LeadPipelineStage.NEW,
+    )
+    priority = models.CharField(
+        max_length=16,
+        choices=LeadPriority.choices,
+        default=LeadPriority.MEDIUM,
+    )
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_leads",
+    )
+    source = models.CharField(max_length=64, blank=True)
+    last_contacted_at = models.DateTimeField(null=True, blank=True)
+    next_follow_up_at = models.DateTimeField(null=True, blank=True)
+    follow_up_count = models.PositiveIntegerField(default=0)
+    closed_reason = models.CharField(max_length=255, blank=True)
+    conversion_value = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    converted_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -271,6 +337,10 @@ class Inquiry(BaseModel):
             models.Index(fields=["property", "status"]),
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["inquiry_type"]),
+            models.Index(fields=["pipeline_stage", "created_at"]),
+            models.Index(fields=["assigned_to", "pipeline_stage"]),
+            models.Index(fields=["priority"]),
+            models.Index(fields=["next_follow_up_at"]),
         ]
 
     def __str__(self) -> str:
@@ -286,6 +356,55 @@ class Inquiry(BaseModel):
             raise ValueError(f"Inquiry cannot move from {self.status} to {next_status}.")
         self.status = next_status
         self.save(update_fields=["status", "updated_at"])
+
+    def can_transition_pipeline_to(self, next_stage: str) -> bool:
+        return next_stage in self.VALID_PIPELINE_TRANSITIONS.get(self.pipeline_stage, set())
+
+    def transition_pipeline_to(self, next_stage: str) -> None:
+        if next_stage == self.pipeline_stage:
+            return
+        if not self.can_transition_pipeline_to(next_stage):
+            raise ValueError(
+                f"Lead cannot move from {self.pipeline_stage} to {next_stage}."
+            )
+        update_fields = ["pipeline_stage", "updated_at"]
+        self.pipeline_stage = next_stage
+        if next_stage == LeadPipelineStage.CONVERTED:
+            self.converted_at = timezone.now()
+            update_fields.append("converted_at")
+        self.save(update_fields=update_fields)
+
+
+class LeadActivity(BaseModel):
+    inquiry = models.ForeignKey(
+        Inquiry,
+        on_delete=models.CASCADE,
+        related_name="activities",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="lead_activities",
+    )
+    activity_type = models.CharField(
+        max_length=32,
+        choices=LeadActivityType.choices,
+    )
+    note = models.TextField(blank=True)
+    scheduled_for = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["inquiry", "created_at"]),
+            models.Index(fields=["inquiry", "activity_type"]),
+            models.Index(fields=["scheduled_for"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_activity_type_display()} on inquiry {self.inquiry_id}"
 
 
 class Viewing(BaseModel):

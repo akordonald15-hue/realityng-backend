@@ -81,3 +81,33 @@ class RentalApplicationStatus(models.TextChoices):
     APPROVED = "approved", "Approved"
     REJECTED = "rejected", "Rejected"
     WITHDRAWN = "withdrawn", "Withdrawn"
+
+
+class LeadPriority(models.TextChoices):
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+    URGENT = "urgent", "Urgent"
+
+
+class LeadPipelineStage(models.TextChoices):
+    NEW = "new", "New"
+    CONTACTED = "contacted", "Contacted"
+    QUALIFIED = "qualified", "Qualified"
+    VIEWING_SCHEDULED = "viewing_scheduled", "Viewing Scheduled"
+    APPLICATION_STARTED = "application_started", "Application Started"
+    APPLICATION_SUBMITTED = "application_submitted", "Application Submitted"
+    NEGOTIATING = "negotiating", "Negotiating"
+    CONVERTED = "converted", "Converted"
+    CLOSED_LOST = "closed_lost", "Closed Lost"
+
+
+class LeadActivityType(models.TextChoices):
+    NOTE = "note", "Note"
+    CALL = "call", "Call"
+    WHATSAPP = "whatsapp", "WhatsApp"
+    EMAIL = "email", "Email"
+    FOLLOW_UP_SCHEDULED = "follow_up_scheduled", "Follow-up Scheduled"
+    FOLLOW_UP_COMPLETED = "follow_up_completed", "Follow-up Completed"
+    STATUS_CHANGED = "status_changed", "Status Changed"
+    ASSIGNED = "assigned", "Assigned"
