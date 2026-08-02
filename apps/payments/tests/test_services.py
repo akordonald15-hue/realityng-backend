@@ -59,7 +59,9 @@ class TestMilestoneAndProofFlow:
         milestone = self._milestone(transaction, owner)
         assert milestone.status == MilestoneStatus.PENDING
 
-    def test_submit_proof_moves_to_proof_uploaded(self, transaction, buyer, owner, valid_proof_file):
+    def test_submit_proof_moves_to_proof_uploaded(
+        self, transaction, buyer, owner, valid_proof_file
+    ):
         milestone = self._milestone(transaction, owner)
         proof = services.submit_payment_proof(
             milestone=milestone, uploaded_by=buyer, file=valid_proof_file,
