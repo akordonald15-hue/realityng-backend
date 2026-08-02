@@ -70,6 +70,7 @@ LOCAL_APPS = [
     "apps.trust",
     "apps.assistant",
     "apps.services",
+    "apps.payments",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -280,3 +281,18 @@ if SENTRY_DSN:
 
 LOGGING_CONFIG = None
 logging.config.dictConfig(LOGGING)
+
+PAYMENT_PROOF_ALLOWED_EXTENSIONS = env.list(
+    "PAYMENT_PROOF_ALLOWED_EXTENSIONS",
+    default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
+PAYMENT_PROOF_BUCKET_NAME = env(
+    "PAYMENT_PROOF_BUCKET_NAME",
+    default="realityng-payment-proof-private",
+)
+PAYMENT_PROOF_SIGNED_URL_EXPIRY = env.int("PAYMENT_PROOF_SIGNED_URL_EXPIRY", default=300)
+PAYMENT_PROOF_ALLOWED_TYPES = env.list(
+    "PAYMENT_PROOF_ALLOWED_TYPES",
+    default=["application/pdf", "image/jpeg", "image/png"],
+)
+PAYMENT_PROOF_MAX_SIZE_MB = env.int("PAYMENT_PROOF_MAX_SIZE_MB", default=10)
