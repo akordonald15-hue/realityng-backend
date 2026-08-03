@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from apps.services.models import ProviderTrade, ServiceArea, ServiceProvider, TradeCategory
+from apps.services.models import (
+    PortfolioImage,
+    ProviderTrade,
+    ServiceArea,
+    ServiceProvider,
+    TradeCategory,
+)
 
 
 class ProviderTradeInline(admin.TabularInline):
@@ -12,6 +18,12 @@ class ProviderTradeInline(admin.TabularInline):
 class ServiceAreaInline(admin.TabularInline):
     model = ServiceArea
     extra = 0
+
+
+class PortfolioImageInline(admin.TabularInline):
+    model = PortfolioImage
+    extra = 0
+    autocomplete_fields = ["category"]
 
 
 @admin.register(TradeCategory)
@@ -32,7 +44,7 @@ class TradeCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(ServiceProvider)
 class ServiceProviderAdmin(admin.ModelAdmin):
-    inlines = [ProviderTradeInline, ServiceAreaInline]
+    inlines = [ProviderTradeInline, ServiceAreaInline, PortfolioImageInline]
     list_display = [
         "business_name",
         "provider_type",
@@ -41,11 +53,13 @@ class ServiceProviderAdmin(admin.ModelAdmin):
         "city",
         "average_rating",
         "completed_jobs_count",
+        "submitted_at",
+        "published_at",
     ]
     list_filter = ["provider_type", "status", "state", "city"]
     search_fields = ["business_name", "headline", "biography", "user__email"]
     prepopulated_fields = {"slug": ("business_name",)}
-    autocomplete_fields = ["user"]
+    autocomplete_fields = ["user", "reviewed_by"]
     ordering = ["business_name"]
 
 
@@ -66,7 +80,23 @@ class ProviderTradeAdmin(admin.ModelAdmin):
 
 @admin.register(ServiceArea)
 class ServiceAreaAdmin(admin.ModelAdmin):
-    list_display = ["provider", "state", "city", "lga", "neighborhood", "service_radius_km"]
-    list_filter = ["state", "city", "lga"]
+    list_display = [
+        "provider",
+        "state",
+        "city",
+        "lga",
+        "neighborhood",
+        "service_radius_km",
+        "is_primary",
+    ]
+    list_filter = ["state", "city", "lga", "is_primary"]
     search_fields = ["provider__business_name", "state", "city", "lga", "neighborhood"]
     autocomplete_fields = ["provider"]
+
+
+@admin.register(PortfolioImage)
+class PortfolioImageAdmin(admin.ModelAdmin):
+    list_display = ["provider", "caption", "category", "display_order", "is_cover", "status"]
+    list_filter = ["status", "is_cover", "category"]
+    search_fields = ["provider__business_name", "caption"]
+    autocomplete_fields = ["provider", "category"]

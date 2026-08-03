@@ -10,6 +10,7 @@ class ProviderStatus(models.TextChoices):
     DRAFT = "draft", "Draft"
     PENDING_REVIEW = "pending_review", "Pending Review"
     ACTIVE = "active", "Active"
+    NEEDS_MORE_INFORMATION = "needs_more_information", "Needs More Information"
     REJECTED = "rejected", "Rejected"
     SUSPENDED = "suspended", "Suspended"
     INACTIVE = "inactive", "Inactive"
@@ -25,3 +26,9 @@ class SkillLevel(models.TextChoices):
     APPRENTICE = "apprentice", "Apprentice"
     INTERMEDIATE = "intermediate", "Intermediate"
     EXPERT = "expert", "Expert"
+
+
+class PortfolioImageStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    PENDING_REVIEW = "pending_review", "Pending Review"
+    REJECTED = "rejected", "Rejected"
