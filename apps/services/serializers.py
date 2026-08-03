@@ -10,12 +10,15 @@ from rest_framework import serializers
 from apps.properties.serializers import build_media_url
 from apps.services.choices import (
     PortfolioImageStatus,
+    PreferredContactMethod,
     ProviderStatus,
     ProviderTradeStatus,
+    QuoteRequestStatus,
 )
 from apps.services.models import (
     PortfolioImage,
     ProviderTrade,
+    QuoteRequest,
     ServiceArea,
     ServiceProvider,
     TradeCategory,
@@ -578,6 +581,144 @@ class AdminDecisionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True)
     message = serializers.CharField(required=False, allow_blank=True)
     review_notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class QuoteProviderSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceProvider
+        fields = ["id", "slug", "business_name", "provider_type", "display_location"]
+        read_only_fields = fields
+
+
+class QuoteRequestSerializer(serializers.ModelSerializer):
+    provider = QuoteProviderSummarySerializer(read_only=True)
+    service_category = TradeCategorySerializer(read_only=True)
+    customer_email = serializers.EmailField(source="customer.email", read_only=True)
+
+    class Meta:
+        model = QuoteRequest
+        fields = [
+            "id",
+            "customer",
+            "customer_name",
+            "customer_email",
+            "provider",
+            "service_category",
+            "project_title",
+            "project_description",
+            "budget_range",
+            "preferred_contact_method",
+            "phone",
+            "email",
+            "property_address",
+            "state",
+            "lga",
+            "preferred_start_date",
+            "status",
+            "viewed_at",
+            "responded_at",
+            "closed_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class QuoteRequestCreateSerializer(serializers.ModelSerializer):
+    provider_slug = serializers.CharField(write_only=True)
+    service_category_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+    customer_name = serializers.CharField(required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+    class Meta:
+        model = QuoteRequest
+        fields = [
+            "provider_slug",
+            "service_category_id",
+            "customer_name",
+            "project_title",
+            "project_description",
+            "budget_range",
+            "preferred_contact_method",
+            "phone",
+            "email",
+            "property_address",
+            "state",
+            "lga",
+            "preferred_start_date",
+        ]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        provider_slug = attrs.pop("provider_slug")
+        try:
+            provider = active_public_provider_queryset().get(slug=provider_slug)
+        except ServiceProvider.DoesNotExist as exc:
+            raise serializers.ValidationError(
+                {"provider_slug": ["This provider is not available for quote requests."]}
+            ) from exc
+
+        category_id = attrs.pop("service_category_id", None)
+        category = None
+        if category_id:
+            category = TradeCategory.objects.filter(id=category_id, is_active=True).first()
+            if not category:
+                raise serializers.ValidationError(
+                    {"service_category_id": ["Select an active service category."]}
+                )
+            has_category = provider.trades.filter(
+                category=category,
+                status=ProviderTradeStatus.ACTIVE,
+            ).exists()
+            if not has_category:
+                raise serializers.ValidationError(
+                    {
+                        "service_category_id": [
+                            "This provider has not listed that service category."
+                        ]
+                    }
+                )
+
+        if not user or not user.is_authenticated:
+            required = ["customer_name", "phone", "email"]
+            missing = [field for field in required if not attrs.get(field)]
+            if missing:
+                raise serializers.ValidationError(
+                    {
+                        field: ["This field is required for anonymous quote requests."]
+                        for field in missing
+                    }
+                )
+        else:
+            attrs["customer_name"] = attrs.get("customer_name") or user.full_name or user.email
+            attrs["phone"] = attrs.get("phone") or user.phone_number or ""
+            attrs["email"] = attrs.get("email") or user.email
+
+        if attrs.get("preferred_contact_method") not in PreferredContactMethod.values:
+            raise serializers.ValidationError(
+                {"preferred_contact_method": ["Select a valid contact method."]}
+            )
+        if not attrs.get("phone") and attrs.get("preferred_contact_method") in [
+            PreferredContactMethod.PHONE,
+            PreferredContactMethod.WHATSAPP,
+        ]:
+            raise serializers.ValidationError(
+                {"phone": ["Phone is required for phone or WhatsApp contact."]}
+            )
+
+        attrs["provider"] = provider
+        attrs["service_category"] = category
+        attrs["customer"] = user if user and user.is_authenticated else None
+        return attrs
+
+    def create(self, validated_data):
+        return QuoteRequest.objects.create(**validated_data)
+
+
+class QuoteRequestStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=QuoteRequestStatus.choices)
 
 
 def validate_provider_submission(provider: ServiceProvider) -> dict:

@@ -3,6 +3,7 @@ from django.contrib import admin
 from apps.services.models import (
     PortfolioImage,
     ProviderTrade,
+    QuoteRequest,
     ServiceArea,
     ServiceProvider,
     TradeCategory,
@@ -100,3 +101,27 @@ class PortfolioImageAdmin(admin.ModelAdmin):
     list_filter = ["status", "is_cover", "category"]
     search_fields = ["provider__business_name", "caption"]
     autocomplete_fields = ["provider", "category"]
+
+
+@admin.register(QuoteRequest)
+class QuoteRequestAdmin(admin.ModelAdmin):
+    list_display = [
+        "project_title",
+        "provider",
+        "customer_name",
+        "status",
+        "preferred_contact_method",
+        "state",
+        "created_at",
+    ]
+    list_filter = ["status", "preferred_contact_method", "state", "created_at"]
+    search_fields = [
+        "project_title",
+        "project_description",
+        "customer_name",
+        "phone",
+        "email",
+        "provider__business_name",
+    ]
+    autocomplete_fields = ["customer", "provider", "service_category"]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
