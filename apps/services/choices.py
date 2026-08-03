@@ -42,6 +42,13 @@ class QuoteRequestStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class ServiceBookingStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    CONFIRMED = "confirmed", "Confirmed"
+    COMPLETED = "completed", "Completed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
 class PreferredContactMethod(models.TextChoices):
     PHONE = "phone", "Phone"
     EMAIL = "email", "Email"

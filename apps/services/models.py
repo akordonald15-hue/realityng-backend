@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -14,6 +15,7 @@ from apps.services.choices import (
     ProviderTradeStatus,
     ProviderType,
     QuoteRequestStatus,
+    ServiceBookingStatus,
     SkillLevel,
 )
 
@@ -491,3 +493,98 @@ class QuoteRequest(BaseModel):
             self.status = QuoteRequestStatus.CANCELLED
             self.closed_at = timezone.now()
             self.save(update_fields=["status", "closed_at", "updated_at"])
+
+
+class ServiceBooking(BaseModel):
+    quote_request = models.OneToOneField(
+        QuoteRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="service_booking",
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_bookings",
+    )
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="service_bookings",
+    )
+    service_category = models.ForeignKey(
+        TradeCategory,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="service_bookings",
+    )
+    title = models.CharField(max_length=180)
+    service_summary = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=ServiceBookingStatus.choices,
+        default=ServiceBookingStatus.PENDING,
+        db_index=True,
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["customer", "status", "created_at"]),
+            models.Index(fields=["completed_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(status=ServiceBookingStatus.COMPLETED, completed_at__isnull=False)
+                    | ~Q(status=ServiceBookingStatus.COMPLETED)
+                ),
+                name="completed_service_booking_has_completed_at",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.title} with {self.provider.business_name}"
+
+    @property
+    def is_review_eligible(self) -> bool:
+        return self.status == ServiceBookingStatus.COMPLETED and bool(self.completed_at)
+
+    def clean(self) -> None:
+        if self.provider_id and self.customer_id == self.provider.user_id:
+            raise ValidationError({"customer": "Providers cannot book their own services."})
+        if self.status == ServiceBookingStatus.COMPLETED and not self.completed_at:
+            raise ValidationError({"completed_at": "Completed bookings require a completion time."})
+        if self.service_category_id and self.provider_id:
+            has_category = self.provider.trades.filter(
+                category_id=self.service_category_id,
+                status=ProviderTradeStatus.ACTIVE,
+            ).exists()
+            if not has_category:
+                raise ValidationError(
+                    {"service_category": "This provider does not offer that active trade."}
+                )
+
+    def confirm(self) -> None:
+        if self.status == ServiceBookingStatus.PENDING:
+            self.status = ServiceBookingStatus.CONFIRMED
+            self.confirmed_at = timezone.now()
+            self.save(update_fields=["status", "confirmed_at", "updated_at"])
+
+    def complete(self) -> None:
+        if self.status not in [ServiceBookingStatus.COMPLETED, ServiceBookingStatus.CANCELLED]:
+            self.status = ServiceBookingStatus.COMPLETED
+            self.completed_at = timezone.now()
+            self.save(update_fields=["status", "completed_at", "updated_at"])
+
+    def cancel(self) -> None:
+        if self.status != ServiceBookingStatus.COMPLETED:
+            self.status = ServiceBookingStatus.CANCELLED
+            self.cancelled_at = timezone.now()
+            self.save(update_fields=["status", "cancelled_at", "updated_at"])

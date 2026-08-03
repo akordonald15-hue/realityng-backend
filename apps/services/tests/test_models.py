@@ -1,10 +1,12 @@
 import pytest
+from django.core.exceptions import ValidationError
 
-from apps.services.choices import ProviderStatus, ProviderType
+from apps.services.choices import ProviderStatus, ProviderType, ServiceBookingStatus
 from apps.services.models import (
     PortfolioImage,
     ProviderTrade,
     ServiceArea,
+    ServiceBooking,
     ServiceProvider,
     TradeCategory,
 )
@@ -98,3 +100,35 @@ def test_seeded_categories_are_database_driven():
         slug="construction",
         parent__slug="construction-services",
     ).exists()
+
+
+@pytest.mark.django_db
+def test_service_booking_completion_controls_review_eligibility(active_provider, other_user):
+    booking = ServiceBooking.objects.create(
+        customer=other_user,
+        provider=active_provider,
+        service_category=active_provider.trades.get(is_primary=True).category,
+        title="Install inverter wiring",
+        service_summary="Completed apartment inverter wiring.",
+    )
+
+    assert booking.is_review_eligible is False
+
+    booking.complete()
+    booking.refresh_from_db()
+
+    assert booking.status == ServiceBookingStatus.COMPLETED
+    assert booking.completed_at is not None
+    assert booking.is_review_eligible is True
+
+
+@pytest.mark.django_db
+def test_service_booking_rejects_provider_self_booking(active_provider):
+    booking = ServiceBooking(
+        customer=active_provider.user,
+        provider=active_provider,
+        title="Self booking",
+    )
+
+    with pytest.raises(ValidationError):
+        booking.full_clean()

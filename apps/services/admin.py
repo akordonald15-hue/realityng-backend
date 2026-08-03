@@ -5,6 +5,7 @@ from apps.services.models import (
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
+    ServiceBooking,
     ServiceProvider,
     TradeCategory,
 )
@@ -124,4 +125,26 @@ class QuoteRequestAdmin(admin.ModelAdmin):
         "provider__business_name",
     ]
     autocomplete_fields = ["customer", "provider", "service_category"]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
+
+
+@admin.register(ServiceBooking)
+class ServiceBookingAdmin(admin.ModelAdmin):
+    list_display = [
+        "title",
+        "provider",
+        "customer",
+        "status",
+        "service_category",
+        "completed_at",
+        "created_at",
+    ]
+    list_filter = ["status", "service_category", "created_at", "completed_at"]
+    search_fields = [
+        "title",
+        "service_summary",
+        "provider__business_name",
+        "customer__email",
+    ]
+    autocomplete_fields = ["quote_request", "customer", "provider", "service_category"]
     readonly_fields = ["created_at", "updated_at", "deleted_at"]
