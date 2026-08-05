@@ -192,6 +192,11 @@ class ProviderProfileMeView(APIView):
     def patch(self, request):
         provider = get_current_provider(request.user)
         self.check_object_permissions(request, provider)
+        if provider.status == ProviderStatus.SUSPENDED:
+            return Response(
+                {"detail": "Suspended provider profiles cannot be edited."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ServiceProviderOwnerSerializer(
             provider,
             data=request.data,
@@ -268,9 +273,38 @@ class ProviderProfileDeactivateView(APIView):
 
 class ProviderOwnedMixin:
     permission_classes = [IsAuthenticated, IsServiceProviderOwner]
+    blocked_mutation_statuses = {ProviderStatus.SUSPENDED, ProviderStatus.ARCHIVED}
 
     def get_provider(self) -> ServiceProvider:
         return get_current_provider(self.request.user)
+
+    def ensure_provider_can_mutate(self, provider: ServiceProvider):
+        if provider.status in self.blocked_mutation_statuses:
+            return Response(
+                {"detail": "This provider profile is restricted from making changes."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    def create(self, request, *args, **kwargs):
+        if response := self.ensure_provider_can_mutate(self.get_provider()):
+            return response
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if response := self.ensure_provider_can_mutate(self.get_provider()):
+            return response
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if response := self.ensure_provider_can_mutate(self.get_provider()):
+            return response
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if response := self.ensure_provider_can_mutate(self.get_provider()):
+            return response
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -1296,6 +1330,8 @@ class PortfolioImageManagementViewSet(
     )
     @action(detail=True, methods=["post"], url_path="cover")
     def cover(self, request, pk=None):
+        if response := self.ensure_provider_can_mutate(self.get_provider()):
+            return response
         image = self.get_object()
         image.set_as_cover()
         emit_service_event(
@@ -1312,9 +1348,11 @@ class PortfolioImageManagementViewSet(
     )
     @action(detail=False, methods=["post"], url_path="reorder")
     def reorder(self, request):
+        provider = self.get_provider()
+        if response := self.ensure_provider_can_mutate(provider):
+            return response
         serializer = PortfolioReorderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        provider = self.get_provider()
         image_map = {str(image.id): image for image in provider.portfolio_images.all()}
         for item in serializer.validated_data["items"]:
             image = image_map.get(str(item["id"]))

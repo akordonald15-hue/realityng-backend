@@ -40,6 +40,8 @@ from apps.services.models import (
     TradeCategory,
 )
 
+PDF_MAGIC_BYTES = b"%PDF-"
+
 EDITABLE_WITHOUT_REVIEW = {"headline", "biography", "phone", "email"}
 MODERATION_SENSITIVE_FIELDS = {
     "provider_type",
@@ -999,6 +1001,7 @@ class AdminServiceReviewSerializer(ServiceReviewSerializer):
 
 
 class ServiceComplaintEvidenceSerializer(serializers.ModelSerializer):
+    file = serializers.FileField(write_only=True, required=True)
     uploaded_by_email = serializers.EmailField(source="uploaded_by.email", read_only=True)
     file_url = serializers.SerializerMethodField()
 
@@ -1016,8 +1019,46 @@ class ServiceComplaintEvidenceSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "file_url", "uploaded_by", "uploaded_by_email", "created_at"]
 
     def get_file_url(self, obj: ServiceComplaintEvidence) -> str:
-        request = self.context.get("request")
-        return build_media_url(obj.file, request)
+        return ""
+
+    def validate_file(self, value):
+        allowed_types = set(settings.SERVICE_COMPLAINT_EVIDENCE_ALLOWED_TYPES)
+        content_type = getattr(value, "content_type", "")
+        if content_type not in allowed_types:
+            allowed = ", ".join(sorted(allowed_types))
+            raise serializers.ValidationError(f"Evidence must be one of: {allowed}.")
+
+        allowed_extensions = {
+            extension.lower()
+            for extension in settings.SERVICE_COMPLAINT_EVIDENCE_ALLOWED_EXTENSIONS
+        }
+        extension = Path(value.name).suffix.lower()
+        if extension not in allowed_extensions:
+            allowed = ", ".join(sorted(allowed_extensions))
+            raise serializers.ValidationError(f"Evidence extension must be one of: {allowed}.")
+
+        max_size = settings.SERVICE_COMPLAINT_EVIDENCE_MAX_SIZE_MB * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                f"Evidence must be {settings.SERVICE_COMPLAINT_EVIDENCE_MAX_SIZE_MB}MB "
+                "or smaller."
+            )
+
+        if content_type == "application/pdf":
+            header = value.read(len(PDF_MAGIC_BYTES))
+            value.seek(0)
+            if header != PDF_MAGIC_BYTES:
+                raise serializers.ValidationError("Uploaded evidence must be a valid PDF.")
+            return value
+
+        try:
+            image = Image.open(value)
+            image.verify()
+        except (UnidentifiedImageError, OSError) as exc:
+            raise serializers.ValidationError("Uploaded evidence must be a valid image.") from exc
+        finally:
+            value.seek(0)
+        return value
 
 
 class ServiceComplaintSerializer(serializers.ModelSerializer):

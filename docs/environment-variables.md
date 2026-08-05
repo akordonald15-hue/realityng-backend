@@ -40,6 +40,9 @@
 | `PROPERTY_IMAGE_MAX_COUNT` | `30` | Maximum number of uploaded images per property. |
 | `PROPERTY_IMAGE_MAX_SIZE_MB` | `10` | Maximum uploaded image size in megabytes. |
 | `PROPERTY_IMAGE_ALLOWED_TYPES` | `image/jpeg,image/png,image/webp` | Comma-separated allowed image MIME types. |
+| `SERVICE_COMPLAINT_EVIDENCE_MAX_SIZE_MB` | `10` | Maximum uploaded service complaint evidence size in megabytes. |
+| `SERVICE_COMPLAINT_EVIDENCE_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed service complaint evidence MIME types. |
+| `SERVICE_COMPLAINT_EVIDENCE_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed service complaint evidence extensions. |
 | `VERIFICATION_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum uploaded verification document size in megabytes. |
 | `VERIFICATION_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed verification document MIME types. |
 | `VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed verification document extensions. |

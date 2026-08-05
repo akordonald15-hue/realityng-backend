@@ -1057,6 +1057,55 @@ def test_admin_can_resolve_service_complaint_and_normal_user_cannot(
 
 
 @pytest.mark.django_db
+def test_complaint_evidence_upload_is_validated_and_does_not_expose_public_url(
+    api_client,
+    active_provider,
+    other_user,
+):
+    complaint = ServiceComplaint.objects.create(
+        complainant=other_user,
+        provider=active_provider,
+        complaint_type=ServiceComplaintType.CUSTOMER,
+        category=ServiceComplaintCategory.SAFETY,
+        subject="Evidence review",
+        description="Needs supporting evidence.",
+    )
+
+    api_client.force_authenticate(user=other_user)
+    invalid_response = api_client.post(
+        reverse("service-complaints-add-evidence", args=[complaint.id]),
+        {
+            "file": SimpleUploadedFile(
+                "not-a-real.pdf",
+                b"not a pdf",
+                content_type="application/pdf",
+            )
+        },
+        format="multipart",
+    )
+    valid_response = api_client.post(
+        reverse("service-complaints-add-evidence", args=[complaint.id]),
+        {
+            "file": SimpleUploadedFile(
+                "evidence.pdf",
+                b"%PDF-1.4\nsynthetic complaint evidence",
+                content_type="application/pdf",
+            ),
+            "caption": "Synthetic evidence",
+        },
+        format="multipart",
+    )
+    list_response = api_client.get(reverse("service-complaints-detail", args=[complaint.id]))
+
+    assert invalid_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert valid_response.status_code == status.HTTP_201_CREATED
+    assert valid_response.data["file_url"] == ""
+    assert "file" not in valid_response.data
+    assert list_response.data["evidence"][0]["file_url"] == ""
+    assert "file" not in list_response.data["evidence"][0]
+
+
+@pytest.mark.django_db
 def test_admin_warning_and_suspension_hide_provider_and_block_actions(
     api_client,
     active_provider,
@@ -1108,6 +1157,79 @@ def test_admin_warning_and_suspension_hide_provider_and_block_actions(
     )
 
     assert quote_response.status_code == status.HTTP_403_FORBIDDEN
+
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=5,
+        title="Published review",
+        comment="The provider completed the work.",
+        status=ServiceReviewStatus.PUBLISHED,
+    )
+    review_response = api_client.post(
+        reverse("service-reviews-respond", args=[review.id]),
+        {"response": "Thank you for the review."},
+        format="json",
+    )
+
+    assert review_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_suspended_provider_cannot_mutate_profile_assets(
+    api_client,
+    active_provider,
+    admin_user,
+    plumbing_category,
+    test_image_file,
+):
+    active_provider.suspend(
+        reviewer=admin_user,
+        reason="Governance hold during investigation.",
+        suspension_type=ProviderSuspensionType.TEMPORARY,
+    )
+    trade = active_provider.trades.get(is_primary=True)
+    service_area = active_provider.service_areas.first()
+
+    api_client.force_authenticate(user=active_provider.user)
+    profile_response = api_client.patch(
+        reverse("service-provider-profile-me"),
+        {"headline": "Updated while suspended"},
+        format="json",
+    )
+    trade_response = api_client.patch(
+        reverse("service-provider-profile-trades-detail", args=[trade.id]),
+        {"years_experience": 10},
+        format="json",
+    )
+    service_area_response = api_client.patch(
+        reverse("service-provider-profile-service-areas-detail", args=[service_area.id]),
+        {"neighborhood": "Ikoyi"},
+        format="json",
+    )
+    portfolio_response = api_client.post(
+        reverse("service-provider-profile-portfolio-list"),
+        {"image": test_image_file("blocked.jpg"), "caption": "Blocked upload"},
+        format="multipart",
+    )
+    trade_create_response = api_client.post(
+        reverse("service-provider-profile-trades-list"),
+        {
+            "category_id": str(plumbing_category.id),
+            "years_experience": 3,
+            "skill_level": "intermediate",
+        },
+        format="json",
+    )
+
+    assert profile_response.status_code == status.HTTP_403_FORBIDDEN
+    assert trade_response.status_code == status.HTTP_403_FORBIDDEN
+    assert service_area_response.status_code == status.HTTP_403_FORBIDDEN
+    assert portfolio_response.status_code == status.HTTP_403_FORBIDDEN
+    assert trade_create_response.status_code == status.HTTP_403_FORBIDDEN
+    assert not PortfolioImage.objects.filter(provider=active_provider).exists()
 
 
 @pytest.mark.django_db
