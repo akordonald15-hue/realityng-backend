@@ -137,11 +137,19 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_SERVICE_QUOTE_REQUEST_MANAGE_RATE",
             default="120/hour",
         ),
+        "service_review_create": env("DRF_THROTTLE_SERVICE_REVIEW_CREATE_RATE", default="5/hour"),
+        "service_review_update": env("DRF_THROTTLE_SERVICE_REVIEW_UPDATE_RATE", default="20/hour"),
+        "service_review_response": env(
+            "DRF_THROTTLE_SERVICE_REVIEW_RESPONSE_RATE",
+            default="20/hour",
+        ),
+        "service_review_flag": env("DRF_THROTTLE_SERVICE_REVIEW_FLAG_RATE", default="20/hour"),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
 
 AUTH_USER_MODEL = "accounts.User"
+SERVICE_REVIEW_EDIT_WINDOW_HOURS = env.int("SERVICE_REVIEW_EDIT_WINDOW_HOURS", default=48)
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),

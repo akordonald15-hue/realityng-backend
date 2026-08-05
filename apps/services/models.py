@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -14,6 +15,9 @@ from apps.services.choices import (
     ProviderTradeStatus,
     ProviderType,
     QuoteRequestStatus,
+    ServiceBookingStatus,
+    ServiceReviewFlagReason,
+    ServiceReviewStatus,
     SkillLevel,
 )
 
@@ -101,6 +105,12 @@ class ServiceProvider(BaseModel):
     display_location = models.CharField(max_length=220, blank=True)
     verification_snapshot = models.JSONField(default=dict, blank=True)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    average_quality_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    average_punctuality_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    average_communication_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    average_value_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    published_review_count = models.PositiveIntegerField(default=0)
+    recommendation_percentage = models.PositiveSmallIntegerField(default=0)
     completed_jobs_count = models.PositiveIntegerField(default=0)
     status = models.CharField(
         max_length=32,
@@ -491,3 +501,260 @@ class QuoteRequest(BaseModel):
             self.status = QuoteRequestStatus.CANCELLED
             self.closed_at = timezone.now()
             self.save(update_fields=["status", "closed_at", "updated_at"])
+
+
+class ServiceBooking(BaseModel):
+    quote_request = models.OneToOneField(
+        QuoteRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="service_booking",
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_bookings",
+    )
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="service_bookings",
+    )
+    service_category = models.ForeignKey(
+        TradeCategory,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="service_bookings",
+    )
+    title = models.CharField(max_length=180)
+    service_summary = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=ServiceBookingStatus.choices,
+        default=ServiceBookingStatus.PENDING,
+        db_index=True,
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["customer", "status", "created_at"]),
+            models.Index(fields=["completed_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(status=ServiceBookingStatus.COMPLETED, completed_at__isnull=False)
+                    | ~Q(status=ServiceBookingStatus.COMPLETED)
+                ),
+                name="completed_service_booking_has_completed_at",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.title} with {self.provider.business_name}"
+
+    @property
+    def is_review_eligible(self) -> bool:
+        return self.status == ServiceBookingStatus.COMPLETED and bool(self.completed_at)
+
+    def clean(self) -> None:
+        if self.provider_id and self.customer_id == self.provider.user_id:
+            raise ValidationError({"customer": "Providers cannot book their own services."})
+        if self.status == ServiceBookingStatus.COMPLETED and not self.completed_at:
+            raise ValidationError({"completed_at": "Completed bookings require a completion time."})
+        if self.service_category_id and self.provider_id:
+            has_category = self.provider.trades.filter(
+                category_id=self.service_category_id,
+                status=ProviderTradeStatus.ACTIVE,
+            ).exists()
+            if not has_category:
+                raise ValidationError(
+                    {"service_category": "This provider does not offer that active trade."}
+                )
+
+    def confirm(self) -> None:
+        if self.status == ServiceBookingStatus.PENDING:
+            self.status = ServiceBookingStatus.CONFIRMED
+            self.confirmed_at = timezone.now()
+            self.save(update_fields=["status", "confirmed_at", "updated_at"])
+
+    def complete(self) -> None:
+        if self.status not in [ServiceBookingStatus.COMPLETED, ServiceBookingStatus.CANCELLED]:
+            self.status = ServiceBookingStatus.COMPLETED
+            self.completed_at = timezone.now()
+            self.save(update_fields=["status", "completed_at", "updated_at"])
+
+    def cancel(self) -> None:
+        if self.status != ServiceBookingStatus.COMPLETED:
+            self.status = ServiceBookingStatus.CANCELLED
+            self.cancelled_at = timezone.now()
+            self.save(update_fields=["status", "cancelled_at", "updated_at"])
+
+
+class ServiceReview(BaseModel):
+    booking = models.OneToOneField(
+        ServiceBooking,
+        on_delete=models.PROTECT,
+        related_name="review",
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_reviews",
+    )
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="reviews",
+    )
+    rating = models.PositiveSmallIntegerField()
+    title = models.CharField(max_length=160)
+    comment = models.TextField()
+    would_recommend = models.BooleanField(default=True)
+    quality_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    punctuality_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    communication_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    value_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=ServiceReviewStatus.choices,
+        default=ServiceReviewStatus.PENDING,
+        db_index=True,
+    )
+    provider_response = models.TextField(blank=True)
+    provider_responded_at = models.DateTimeField(null=True, blank=True)
+    moderation_reason = models.TextField(blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    creation_ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    risk_flags = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["customer", "created_at"]),
+            models.Index(fields=["rating", "created_at"]),
+            models.Index(fields=["published_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(rating__gte=1, rating__lte=5),
+                name="service_review_rating_between_1_and_5",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(quality_rating__isnull=True)
+                    | Q(quality_rating__gte=1, quality_rating__lte=5)
+                ),
+                name="service_review_quality_rating_between_1_and_5",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(punctuality_rating__isnull=True)
+                    | Q(punctuality_rating__gte=1, punctuality_rating__lte=5)
+                ),
+                name="service_review_punctuality_rating_between_1_and_5",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(communication_rating__isnull=True)
+                    | Q(communication_rating__gte=1, communication_rating__lte=5)
+                ),
+                name="service_review_communication_rating_between_1_and_5",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(value_rating__isnull=True)
+                    | Q(value_rating__gte=1, value_rating__lte=5)
+                ),
+                name="service_review_value_rating_between_1_and_5",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.rating}/5 review for {self.provider.business_name}"
+
+    def clean(self) -> None:
+        if self.booking_id:
+            if self.booking.customer_id != self.customer_id:
+                raise ValidationError({"booking": "Only the booking customer can review."})
+            if self.booking.provider_id != self.provider_id:
+                raise ValidationError({"provider": "Review provider must match the booking."})
+            if not self.booking.is_review_eligible:
+                raise ValidationError({"booking": "Only completed bookings can be reviewed."})
+        if self.provider_id and self.customer_id == self.provider.user_id:
+            raise ValidationError({"customer": "Providers cannot review themselves."})
+
+    def publish(self) -> None:
+        if self.status != ServiceReviewStatus.PUBLISHED:
+            self.status = ServiceReviewStatus.PUBLISHED
+            self.published_at = self.published_at or timezone.now()
+            self.save(update_fields=["status", "published_at", "updated_at"])
+
+    def hide(self, reason: str) -> None:
+        self.status = ServiceReviewStatus.HIDDEN
+        self.moderation_reason = reason
+        self.save(update_fields=["status", "moderation_reason", "updated_at"])
+
+    def restore(self) -> None:
+        self.status = ServiceReviewStatus.PUBLISHED
+        self.published_at = self.published_at or timezone.now()
+        self.save(update_fields=["status", "published_at", "updated_at"])
+
+    def remove(self, reason: str) -> None:
+        self.status = ServiceReviewStatus.REMOVED
+        self.moderation_reason = reason
+        self.save(update_fields=["status", "moderation_reason", "updated_at"])
+
+    def mark_disputed(self, reason: str) -> None:
+        self.status = ServiceReviewStatus.DISPUTED
+        self.moderation_reason = reason
+        self.save(update_fields=["status", "moderation_reason", "updated_at"])
+
+    def respond(self, response: str) -> None:
+        self.provider_response = response
+        self.provider_responded_at = timezone.now()
+        self.save(update_fields=["provider_response", "provider_responded_at", "updated_at"])
+
+
+class ServiceReviewFlag(BaseModel):
+    review = models.ForeignKey(
+        ServiceReview,
+        on_delete=models.PROTECT,
+        related_name="flags",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_review_flags",
+    )
+    reason = models.CharField(
+        max_length=40,
+        choices=ServiceReviewFlagReason.choices,
+    )
+    details = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["review", "reason", "created_at"]),
+            models.Index(fields=["user", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["review", "user"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_active_service_review_flag_per_user",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.reason} flag for {self.review_id}"
