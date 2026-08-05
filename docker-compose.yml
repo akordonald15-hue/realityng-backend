@@ -60,7 +60,14 @@ services:
       mc alias set local http://minio:9000 minioadmin minioadmin &&
       mc mb --ignore-existing local/realityng-local &&
       mc anonymous set download local/realityng-local &&
-      mc mb --ignore-existing local/realityng-verification-private
+      mc mb --ignore-existing local/realityng-verification-private &&
+      mc anonymous set none local/realityng-verification-private &&
+      mc mb --ignore-existing local/realityng-walkthroughs &&
+      mc anonymous set download local/realityng-walkthroughs &&
+      mc mb --ignore-existing local/realityng-inspection-evidence &&
+      mc anonymous set none local/realityng-inspection-evidence &&
+      mc mb --ignore-existing local/realityng-inspection-reports &&
+      mc anonymous set none local/realityng-inspection-reports
       "
     networks:
       - realityng-backend
@@ -88,6 +95,17 @@ services:
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET_NAME: realityng-local
       VERIFICATION_DOCUMENT_BUCKET_NAME: realityng-verification-private
+      WALKTHROUGH_STORAGE_BUCKET: realityng-walkthroughs
+      WALKTHROUGH_MAX_FILE_SIZE_MB: "100"
+      WALKTHROUGH_MAX_VIDEOS_PER_PROPERTY: "3"
+      WALKTHROUGH_ALLOWED_MIME_TYPES: video/mp4,video/webm
+      WALKTHROUGH_ALLOWED_EXTENSIONS: .mp4,.webm
+      WALKTHROUGH_REQUIRE_MODERATION: "true"
+      INSPECTION_EVIDENCE_BUCKET: realityng-inspection-evidence
+      INSPECTION_REPORT_BUCKET: realityng-inspection-reports
+      INSPECTION_SIGNED_URL_EXPIRY_SECONDS: "300"
+      INSPECTION_MAX_EVIDENCE_FILE_SIZE_MB: "25"
+      INSPECTION_MAX_REPORT_FILE_SIZE_MB: "25"
       USE_S3_MEDIA_STORAGE: "true"
       PROPERTY_IMAGE_MAX_COUNT: "30"
       PROPERTY_IMAGE_MAX_SIZE_MB: "10"

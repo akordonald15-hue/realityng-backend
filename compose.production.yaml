@@ -96,7 +96,13 @@ services:
       mc mb --ignore-existing local/$$MINIO_BUCKET_NAME &&
       mc anonymous set download local/$$MINIO_BUCKET_NAME &&
       mc mb --ignore-existing local/$$VERIFICATION_DOCUMENT_BUCKET_NAME &&
-      mc anonymous set none local/$$VERIFICATION_DOCUMENT_BUCKET_NAME
+      mc anonymous set none local/$$VERIFICATION_DOCUMENT_BUCKET_NAME &&
+      mc mb --ignore-existing local/$$WALKTHROUGH_STORAGE_BUCKET &&
+      mc anonymous set download local/$$WALKTHROUGH_STORAGE_BUCKET &&
+      mc mb --ignore-existing local/$$INSPECTION_EVIDENCE_BUCKET &&
+      mc anonymous set none local/$$INSPECTION_EVIDENCE_BUCKET &&
+      mc mb --ignore-existing local/$$INSPECTION_REPORT_BUCKET &&
+      mc anonymous set none local/$$INSPECTION_REPORT_BUCKET
       "
     networks:
       - realityng-backend
