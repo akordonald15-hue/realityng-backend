@@ -70,6 +70,7 @@ LOCAL_APPS = [
     "apps.trust",
     "apps.assistant",
     "apps.services",
+    "apps.inspections",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -152,6 +153,29 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_SERVICE_PROVIDER_APPEAL_CREATE_RATE",
             default="5/hour",
         ),
+        "inspection_request_create": env(
+            "DRF_THROTTLE_INSPECTION_REQUEST_CREATE_RATE",
+            default="10/hour",
+        ),
+        "inspection_request_transition": env(
+            "DRF_THROTTLE_INSPECTION_REQUEST_TRANSITION_RATE",
+            default="60/hour",
+        ),
+        "inspection_schedule": env("DRF_THROTTLE_INSPECTION_SCHEDULE_RATE", default="30/hour"),
+        "walkthrough_upload": env("DRF_THROTTLE_WALKTHROUGH_UPLOAD_RATE", default="20/hour"),
+        "walkthrough_submit": env("DRF_THROTTLE_WALKTHROUGH_SUBMIT_RATE", default="40/hour"),
+        "inspection_report_submit": env(
+            "DRF_THROTTLE_INSPECTION_REPORT_SUBMIT_RATE",
+            default="30/hour",
+        ),
+        "inspection_evidence_upload": env(
+            "DRF_THROTTLE_INSPECTION_EVIDENCE_UPLOAD_RATE",
+            default="40/hour",
+        ),
+        "inspection_signed_url": env(
+            "DRF_THROTTLE_INSPECTION_SIGNED_URL_RATE",
+            default="120/hour",
+        ),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
@@ -186,6 +210,9 @@ SPECTACULAR_SETTINGS = {
         "ViewingStatusEnum": "apps.properties.choices.ViewingStatus",
         "VerificationStatusEnum": "apps.trust.choices.VerificationStatus",
         "VerificationTypeEnum": "apps.trust.choices.VerificationType",
+        "InspectionRequestStatusEnum": "apps.inspections.choices.InspectionRequestStatus",
+        "WalkthroughStatusEnum": "apps.inspections.choices.WalkthroughStatus",
+        "InspectionReportStatusEnum": "apps.inspections.choices.InspectionReportStatus",
     },
 }
 
@@ -248,6 +275,73 @@ VERIFICATION_DOCUMENT_BUCKET_NAME = env(
     default="realityng-verification-private",
 )
 VERIFICATION_SIGNED_URL_EXPIRY = env.int("VERIFICATION_SIGNED_URL_EXPIRY", default=300)
+
+WALKTHROUGH_MAX_FILE_SIZE_MB = env.int("WALKTHROUGH_MAX_FILE_SIZE_MB", default=100)
+WALKTHROUGH_MAX_VIDEOS_PER_PROPERTY = env.int("WALKTHROUGH_MAX_VIDEOS_PER_PROPERTY", default=3)
+WALKTHROUGH_ALLOWED_MIME_TYPES = env.list(
+    "WALKTHROUGH_ALLOWED_MIME_TYPES",
+    default=["video/mp4", "video/webm"],
+)
+WALKTHROUGH_ALLOWED_EXTENSIONS = env.list(
+    "WALKTHROUGH_ALLOWED_EXTENSIONS",
+    default=[".mp4", ".webm"],
+)
+WALKTHROUGH_STORAGE_BUCKET = env(
+    "WALKTHROUGH_STORAGE_BUCKET",
+    default="realityng-walkthroughs",
+)
+WALKTHROUGH_UPLOAD_URL_EXPIRY_SECONDS = env.int(
+    "WALKTHROUGH_UPLOAD_URL_EXPIRY_SECONDS",
+    default=900,
+)
+WALKTHROUGH_PUBLIC_BASE_URL = env("WALKTHROUGH_PUBLIC_BASE_URL", default="")
+WALKTHROUGH_REQUIRE_MODERATION = env.bool("WALKTHROUGH_REQUIRE_MODERATION", default=True)
+
+INSPECTION_EVIDENCE_BUCKET = env(
+    "INSPECTION_EVIDENCE_BUCKET",
+    default="realityng-inspection-evidence",
+)
+INSPECTION_REPORT_BUCKET = env(
+    "INSPECTION_REPORT_BUCKET",
+    default="realityng-inspection-reports",
+)
+INSPECTION_SIGNED_URL_EXPIRY_SECONDS = env.int(
+    "INSPECTION_SIGNED_URL_EXPIRY_SECONDS",
+    default=300,
+)
+INSPECTION_MAX_EVIDENCE_FILE_SIZE_MB = env.int(
+    "INSPECTION_MAX_EVIDENCE_FILE_SIZE_MB",
+    default=25,
+)
+INSPECTION_MAX_REPORT_FILE_SIZE_MB = env.int(
+    "INSPECTION_MAX_REPORT_FILE_SIZE_MB",
+    default=25,
+)
+INSPECTION_EVIDENCE_ALLOWED_MIME_TYPES = env.list(
+    "INSPECTION_EVIDENCE_ALLOWED_MIME_TYPES",
+    default=[
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "application/pdf",
+        "video/mp4",
+        "video/webm",
+        "audio/mpeg",
+        "audio/wav",
+    ],
+)
+INSPECTION_EVIDENCE_ALLOWED_EXTENSIONS = env.list(
+    "INSPECTION_EVIDENCE_ALLOWED_EXTENSIONS",
+    default=[".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".webm", ".mp3", ".wav"],
+)
+INSPECTION_REPORT_ALLOWED_MIME_TYPES = env.list(
+    "INSPECTION_REPORT_ALLOWED_MIME_TYPES",
+    default=["application/pdf", "image/jpeg", "image/png"],
+)
+INSPECTION_REPORT_ALLOWED_EXTENSIONS = env.list(
+    "INSPECTION_REPORT_ALLOWED_EXTENSIONS",
+    default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
 
 TEMPLATES = [
     {

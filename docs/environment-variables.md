@@ -43,6 +43,21 @@
 | `SERVICE_COMPLAINT_EVIDENCE_MAX_SIZE_MB` | `10` | Maximum uploaded service complaint evidence size in megabytes. |
 | `SERVICE_COMPLAINT_EVIDENCE_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed service complaint evidence MIME types. |
 | `SERVICE_COMPLAINT_EVIDENCE_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed service complaint evidence extensions. |
+| `WALKTHROUGH_MAX_FILE_SIZE_MB` | `100` | Maximum virtual walkthrough video size in megabytes. |
+| `WALKTHROUGH_MAX_VIDEOS_PER_PROPERTY` | `3` | Maximum non-archived walkthrough videos per property. |
+| `WALKTHROUGH_ALLOWED_MIME_TYPES` | `video/mp4,video/webm` | Comma-separated allowed walkthrough video MIME types. |
+| `WALKTHROUGH_ALLOWED_EXTENSIONS` | `.mp4,.webm` | Comma-separated allowed walkthrough video extensions. |
+| `WALKTHROUGH_STORAGE_BUCKET` | `realityng-walkthroughs` | Bucket for moderated public walkthrough videos. |
+| `WALKTHROUGH_REQUIRE_MODERATION` | `true` | Keeps walkthroughs private until admin approval. |
+| `INSPECTION_EVIDENCE_BUCKET` | `realityng-inspection-evidence` | Private bucket for inspection evidence. |
+| `INSPECTION_REPORT_BUCKET` | `realityng-inspection-reports` | Private bucket for inspection report documents. |
+| `INSPECTION_SIGNED_URL_EXPIRY_SECONDS` | `300` | Signed inspection report/evidence URL lifetime in seconds. |
+| `INSPECTION_MAX_EVIDENCE_FILE_SIZE_MB` | `25` | Maximum private evidence upload size in megabytes. |
+| `INSPECTION_MAX_REPORT_FILE_SIZE_MB` | `25` | Maximum private report upload size in megabytes. |
+| `INSPECTION_EVIDENCE_ALLOWED_MIME_TYPES` | `image/jpeg,image/png,image/webp,application/pdf,video/mp4,video/webm,audio/mpeg,audio/wav` | Comma-separated allowed private evidence MIME types. |
+| `INSPECTION_EVIDENCE_ALLOWED_EXTENSIONS` | `.jpg,.jpeg,.png,.webp,.pdf,.mp4,.webm,.mp3,.wav` | Comma-separated allowed private evidence extensions. |
+| `INSPECTION_REPORT_ALLOWED_MIME_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed report document MIME types. |
+| `INSPECTION_REPORT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed report document extensions. |
 | `VERIFICATION_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum uploaded verification document size in megabytes. |
 | `VERIFICATION_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed verification document MIME types. |
 | `VERIFICATION_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed verification document extensions. |
