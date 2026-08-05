@@ -4,8 +4,21 @@ from django.urls import reverse
 from rest_framework import status
 
 from apps.accounts.models import AuditLog, UserRole
-from apps.services.choices import ProviderStatus, ProviderType, QuoteRequestStatus
-from apps.services.models import PortfolioImage, ProviderTrade, QuoteRequest, ServiceProvider
+from apps.services.choices import (
+    ProviderStatus,
+    ProviderType,
+    QuoteRequestStatus,
+    ServiceReviewFlagReason,
+    ServiceReviewStatus,
+)
+from apps.services.models import (
+    PortfolioImage,
+    ProviderTrade,
+    QuoteRequest,
+    ServiceBooking,
+    ServiceProvider,
+    ServiceReview,
+)
 
 
 @pytest.mark.django_db
@@ -572,3 +585,266 @@ def test_admin_can_filter_and_close_quote_requests(api_client, admin_user, activ
     )
     assert close_response.status_code == status.HTTP_200_OK
     assert close_response.data["status"] == QuoteRequestStatus.CLOSED
+
+
+def create_completed_service_booking(active_provider, customer):
+    booking = ServiceBooking.objects.create(
+        customer=customer,
+        provider=active_provider,
+        service_category=active_provider.trades.get(is_primary=True).category,
+        title="Inverter wiring repair",
+        service_summary="Provider completed inverter wiring repair.",
+    )
+    booking.complete()
+    booking.refresh_from_db()
+    return booking
+
+
+@pytest.mark.django_db
+def test_customer_can_review_only_completed_booking(api_client, active_provider, other_user):
+    booking = create_completed_service_booking(active_provider, other_user)
+    api_client.force_authenticate(user=other_user)
+
+    response = api_client.post(
+        reverse("service-reviews-list"),
+        {
+            "booking_id": str(booking.id),
+            "rating": 5,
+            "title": "Excellent electrical work",
+            "comment": "The provider arrived prepared and fixed the wiring cleanly.",
+            "would_recommend": True,
+            "quality_rating": 5,
+            "punctuality_rating": 4,
+            "communication_rating": 5,
+            "value_rating": 5,
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    review = ServiceReview.objects.get(booking=booking)
+    assert review.customer == other_user
+    assert review.provider == active_provider
+    assert review.status == ServiceReviewStatus.PENDING
+    assert AuditLog.objects.filter(action="service_review.created").exists()
+
+
+@pytest.mark.django_db
+def test_review_rejects_incomplete_booking_and_duplicate(
+    api_client,
+    active_provider,
+    other_user,
+):
+    incomplete_booking = ServiceBooking.objects.create(
+        customer=other_user,
+        provider=active_provider,
+        title="Pending service",
+    )
+    completed_booking = create_completed_service_booking(active_provider, other_user)
+    ServiceReview.objects.create(
+        booking=completed_booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=4,
+        title="Already reviewed",
+        comment="This booking already has a review.",
+    )
+    api_client.force_authenticate(user=other_user)
+
+    incomplete_response = api_client.post(
+        reverse("service-reviews-list"),
+        {
+            "booking_id": str(incomplete_booking.id),
+            "rating": 5,
+            "title": "Too early",
+            "comment": "This should not be accepted.",
+            "would_recommend": True,
+        },
+        format="json",
+    )
+    duplicate_response = api_client.post(
+        reverse("service-reviews-list"),
+        {
+            "booking_id": str(completed_booking.id),
+            "rating": 5,
+            "title": "Duplicate",
+            "comment": "This should not be accepted.",
+            "would_recommend": True,
+        },
+        format="json",
+    )
+
+    assert incomplete_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert duplicate_response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_review_public_visibility_and_aggregation_after_admin_publish(
+    api_client,
+    admin_user,
+    active_provider,
+    other_user,
+):
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=5,
+        title="Trusted electrician",
+        comment="Clear communication and tidy work.",
+        would_recommend=True,
+        quality_rating=5,
+        punctuality_rating=5,
+        communication_rating=5,
+        value_rating=4,
+    )
+
+    public_before = api_client.get(
+        reverse("service-provider-reviews", kwargs={"provider_slug": active_provider.slug})
+    )
+    assert public_before.status_code == status.HTTP_200_OK
+    assert public_before.data["count"] == 0
+
+    api_client.force_authenticate(user=admin_user)
+    publish_response = api_client.post(reverse("service-admin-reviews-publish", args=[review.id]))
+    assert publish_response.status_code == status.HTTP_200_OK
+
+    active_provider.refresh_from_db()
+    assert active_provider.published_review_count == 1
+    assert str(active_provider.average_rating) == "5.00"
+
+    api_client.force_authenticate(user=None)
+    public_after = api_client.get(
+        reverse("service-provider-reviews", kwargs={"provider_slug": active_provider.slug})
+    )
+    assert public_after.status_code == status.HTTP_200_OK
+    assert public_after.data["count"] == 1
+    assert public_after.data["results"][0]["reviewer_label"].endswith("Verified customer")
+    assert "moderation_reason" not in public_after.data["results"][0]
+
+
+@pytest.mark.django_db
+def test_provider_can_respond_once_to_own_published_review(
+    api_client,
+    admin_user,
+    active_provider,
+    other_user,
+):
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=5,
+        title="Helpful provider",
+        comment="Helpful and professional.",
+    )
+    api_client.force_authenticate(user=admin_user)
+    api_client.post(reverse("service-admin-reviews-publish", args=[review.id]))
+    api_client.force_authenticate(user=active_provider.user)
+
+    response = api_client.post(
+        reverse("service-reviews-respond", args=[review.id]),
+        {"response": "Thank you for trusting our team."},
+        format="json",
+    )
+    duplicate_response = api_client.post(
+        reverse("service-reviews-respond", args=[review.id]),
+        {"response": "Second response should fail."},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["provider_response"] == "Thank you for trusting our team."
+    assert duplicate_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert AuditLog.objects.filter(action="service_review.provider_responded").exists()
+
+
+@pytest.mark.django_db
+def test_admin_can_hide_restore_remove_and_dispute_review(
+    api_client,
+    admin_user,
+    active_provider,
+    other_user,
+):
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=4,
+        title="Review needing moderation",
+        comment="Moderation can act on this review.",
+    )
+    api_client.force_authenticate(user=admin_user)
+    api_client.post(reverse("service-admin-reviews-publish", args=[review.id]))
+
+    hide_response = api_client.post(
+        reverse("service-admin-reviews-hide", args=[review.id]),
+        {"reason": "Contains private information."},
+        format="json",
+    )
+    restore_response = api_client.post(reverse("service-admin-reviews-restore", args=[review.id]))
+    disputed_response = api_client.post(
+        reverse("service-admin-reviews-mark-disputed", args=[review.id]),
+        {"reason": "Provider disputes service details."},
+        format="json",
+    )
+    remove_response = api_client.post(
+        reverse("service-admin-reviews-remove", args=[review.id]),
+        {"reason": "Confirmed abuse."},
+        format="json",
+    )
+
+    assert hide_response.data["status"] == ServiceReviewStatus.HIDDEN
+    assert restore_response.data["status"] == ServiceReviewStatus.PUBLISHED
+    assert disputed_response.data["status"] == ServiceReviewStatus.DISPUTED
+    assert remove_response.data["status"] == ServiceReviewStatus.REMOVED
+    assert AuditLog.objects.filter(action="service_review.removed").exists()
+
+
+@pytest.mark.django_db
+def test_review_flagging_is_unique_and_hides_from_public_when_high_risk(
+    api_client,
+    admin_user,
+    active_provider,
+    other_user,
+):
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=5,
+        title="Contains private detail",
+        comment="This published review will be flagged.",
+    )
+    api_client.force_authenticate(user=admin_user)
+    api_client.post(reverse("service-admin-reviews-publish", args=[review.id]))
+    api_client.force_authenticate(user=active_provider.user)
+
+    flag_response = api_client.post(
+        reverse("service-reviews-flag", args=[review.id]),
+        {
+            "reason": ServiceReviewFlagReason.PRIVACY_CONCERN,
+            "details": "The review mentions a private access detail.",
+        },
+        format="json",
+    )
+    duplicate_flag_response = api_client.post(
+        reverse("service-reviews-flag", args=[review.id]),
+        {"reason": ServiceReviewFlagReason.SPAM},
+        format="json",
+    )
+
+    assert flag_response.status_code == status.HTTP_200_OK
+    assert flag_response.data["status"] == ServiceReviewStatus.FLAGGED
+    assert duplicate_flag_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert AuditLog.objects.filter(action="service_review.flagged").exists()
+
+    api_client.force_authenticate(user=None)
+    public_response = api_client.get(
+        reverse("service-provider-reviews", kwargs={"provider_slug": active_provider.slug})
+    )
+    assert public_response.data["count"] == 0

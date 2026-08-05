@@ -7,6 +7,8 @@ from apps.services.models import (
     ServiceArea,
     ServiceBooking,
     ServiceProvider,
+    ServiceReview,
+    ServiceReviewFlag,
     TradeCategory,
 )
 
@@ -147,4 +149,44 @@ class ServiceBookingAdmin(admin.ModelAdmin):
         "customer__email",
     ]
     autocomplete_fields = ["quote_request", "customer", "provider", "service_category"]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
+
+
+@admin.register(ServiceReview)
+class ServiceReviewAdmin(admin.ModelAdmin):
+    list_display = [
+        "title",
+        "provider",
+        "customer",
+        "rating",
+        "status",
+        "would_recommend",
+        "published_at",
+        "created_at",
+    ]
+    list_filter = ["status", "rating", "would_recommend", "created_at", "published_at"]
+    search_fields = [
+        "title",
+        "comment",
+        "provider_response",
+        "moderation_reason",
+        "provider__business_name",
+        "customer__email",
+    ]
+    autocomplete_fields = ["booking", "customer", "provider"]
+    readonly_fields = [
+        "creation_ip",
+        "user_agent",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+    ]
+
+
+@admin.register(ServiceReviewFlag)
+class ServiceReviewFlagAdmin(admin.ModelAdmin):
+    list_display = ["review", "user", "reason", "created_at"]
+    list_filter = ["reason", "created_at"]
+    search_fields = ["details", "review__title", "user__email"]
+    autocomplete_fields = ["review", "user"]
     readonly_fields = ["created_at", "updated_at", "deleted_at"]

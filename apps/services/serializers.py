@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
@@ -14,13 +16,18 @@ from apps.services.choices import (
     ProviderStatus,
     ProviderTradeStatus,
     QuoteRequestStatus,
+    ServiceReviewFlagReason,
+    ServiceReviewStatus,
 )
 from apps.services.models import (
     PortfolioImage,
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
+    ServiceBooking,
     ServiceProvider,
+    ServiceReview,
+    ServiceReviewFlag,
     TradeCategory,
 )
 
@@ -127,6 +134,7 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
     verification_badges = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
     portfolio_count = serializers.SerializerMethodField()
+    review_trust_signals = serializers.SerializerMethodField()
 
     class Meta:
         model = ServiceProvider
@@ -146,7 +154,10 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
             "neighborhood",
             "display_location",
             "verification_badges",
+            "review_trust_signals",
             "average_rating",
+            "published_review_count",
+            "recommendation_percentage",
             "completed_jobs_count",
             "trades",
             "primary_trade",
@@ -186,6 +197,12 @@ class PublicServiceProviderListSerializer(serializers.ModelSerializer):
         if isinstance(badges, list):
             return badges
         return []
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_review_trust_signals(self, obj):
+        from apps.services.services import build_review_trust_signals
+
+        return build_review_trust_signals(obj)
 
     def get_cover_image_url(self, obj: ServiceProvider) -> str:
         image = next(
@@ -241,9 +258,17 @@ class PublicServiceProviderDetailSerializer(PublicServiceProviderListSerializer)
     def get_reviews_summary(self, obj):
         return {
             "average_rating": str(obj.average_rating),
+            "average_quality_rating": str(obj.average_quality_rating),
+            "average_punctuality_rating": str(obj.average_punctuality_rating),
+            "average_communication_rating": str(obj.average_communication_rating),
+            "average_value_rating": str(obj.average_value_rating),
             "completed_jobs_count": obj.completed_jobs_count,
-            "review_count": 0,
-            "message": "Verified booking reviews will be available in a later Sprint 9 phase.",
+            "review_count": obj.published_review_count,
+            "recommendation_percentage": obj.recommendation_percentage,
+            "message": (
+                "Ratings are calculated from published reviews linked to completed "
+                "RealityNG service engagements."
+            ),
         }
 
 
@@ -719,6 +744,231 @@ class QuoteRequestCreateSerializer(serializers.ModelSerializer):
 
 class QuoteRequestStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=QuoteRequestStatus.choices)
+
+
+class ServiceBookingSummarySerializer(serializers.ModelSerializer):
+    service_category = TradeCategorySerializer(read_only=True)
+
+    class Meta:
+        model = ServiceBooking
+        fields = [
+            "id",
+            "title",
+            "service_summary",
+            "status",
+            "service_category",
+            "completed_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ServiceReviewPublicSerializer(serializers.ModelSerializer):
+    reviewer_label = serializers.SerializerMethodField()
+    booking = ServiceBookingSummarySerializer(read_only=True)
+
+    class Meta:
+        model = ServiceReview
+        fields = [
+            "id",
+            "reviewer_label",
+            "booking",
+            "rating",
+            "title",
+            "comment",
+            "would_recommend",
+            "quality_rating",
+            "punctuality_rating",
+            "communication_rating",
+            "value_rating",
+            "provider_response",
+            "provider_responded_at",
+            "published_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField())
+    def get_reviewer_label(self, obj) -> str:
+        first_name = (obj.customer.first_name or "").strip()
+        if first_name:
+            return f"{first_name[:1]}. Verified customer"
+        return "Verified customer"
+
+
+class ServiceReviewSerializer(ServiceReviewPublicSerializer):
+    provider = QuoteProviderSummarySerializer(read_only=True)
+    status = serializers.CharField(read_only=True)
+    can_edit = serializers.SerializerMethodField()
+
+    class Meta(ServiceReviewPublicSerializer.Meta):
+        fields = ServiceReviewPublicSerializer.Meta.fields + [
+            "customer",
+            "provider",
+            "status",
+            "can_edit",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_can_edit(self, obj) -> bool:
+        edit_deadline = obj.created_at + timedelta(
+            hours=getattr(settings, "SERVICE_REVIEW_EDIT_WINDOW_HOURS", 48)
+        )
+        return obj.status == ServiceReviewStatus.PENDING and timezone.now() <= edit_deadline
+
+
+class ServiceReviewCreateSerializer(serializers.ModelSerializer):
+    booking_id = serializers.UUIDField(write_only=True)
+
+    class Meta:
+        model = ServiceReview
+        fields = [
+            "booking_id",
+            "rating",
+            "title",
+            "comment",
+            "would_recommend",
+            "quality_rating",
+            "punctuality_rating",
+            "communication_rating",
+            "value_rating",
+        ]
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        booking_id = attrs.pop("booking_id")
+        try:
+            booking = ServiceBooking.objects.select_related(
+                "customer",
+                "provider",
+                "service_category",
+            ).get(id=booking_id, customer=request.user)
+        except ServiceBooking.DoesNotExist as exc:
+            raise serializers.ValidationError(
+                {"booking_id": ["This completed booking is not available for review."]}
+            ) from exc
+
+        if not booking.is_review_eligible:
+            raise serializers.ValidationError(
+                {"booking_id": ["Only completed service bookings can be reviewed."]}
+            )
+        if booking.provider.user_id == request.user.id:
+            raise serializers.ValidationError(
+                {"booking_id": ["Providers cannot review themselves."]}
+            )
+        if booking.provider.status != ProviderStatus.ACTIVE:
+            raise serializers.ValidationError(
+                {"provider": ["This provider is not currently eligible for reviews."]}
+            )
+        if ServiceReview.objects.filter(booking=booking).exists():
+            raise serializers.ValidationError(
+                {"booking_id": ["A review already exists for this booking."]}
+            )
+        self._reject_unsafe_text(attrs.get("title", ""), "title")
+        self._reject_unsafe_text(attrs.get("comment", ""), "comment")
+        attrs["booking"] = booking
+        attrs["customer"] = request.user
+        attrs["provider"] = booking.provider
+        return attrs
+
+    def validate_rating(self, value):
+        return self._validate_rating(value, "rating")
+
+    def validate_quality_rating(self, value):
+        return self._validate_optional_rating(value, "quality_rating")
+
+    def validate_punctuality_rating(self, value):
+        return self._validate_optional_rating(value, "punctuality_rating")
+
+    def validate_communication_rating(self, value):
+        return self._validate_optional_rating(value, "communication_rating")
+
+    def validate_value_rating(self, value):
+        return self._validate_optional_rating(value, "value_rating")
+
+    def _validate_optional_rating(self, value, field_name):
+        if value is None:
+            return value
+        return self._validate_rating(value, field_name)
+
+    def _validate_rating(self, value, field_name):
+        if not 1 <= value <= 5:
+            raise serializers.ValidationError(f"{field_name} must be between 1 and 5.")
+        return value
+
+    def _reject_unsafe_text(self, value: str, field_name: str) -> None:
+        if "<" in value or ">" in value:
+            raise serializers.ValidationError({field_name: ["HTML is not allowed."]})
+
+
+class ServiceReviewUpdateSerializer(ServiceReviewCreateSerializer):
+    booking_id = serializers.UUIDField(write_only=True, required=False)
+
+    class Meta(ServiceReviewCreateSerializer.Meta):
+        fields = [
+            "rating",
+            "title",
+            "comment",
+            "would_recommend",
+            "quality_rating",
+            "punctuality_rating",
+            "communication_rating",
+            "value_rating",
+        ]
+
+    def validate(self, attrs):
+        self._reject_unsafe_text(attrs.get("title", ""), "title")
+        self._reject_unsafe_text(attrs.get("comment", ""), "comment")
+        return attrs
+
+
+class ProviderReviewResponseSerializer(serializers.Serializer):
+    response = serializers.CharField(min_length=2, max_length=800)
+
+    def validate_response(self, value):
+        if "<" in value or ">" in value:
+            raise serializers.ValidationError("HTML is not allowed.")
+        return value.strip()
+
+
+class ServiceReviewFlagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceReviewFlag
+        fields = ["reason", "details"]
+
+    def validate_reason(self, value):
+        if value not in ServiceReviewFlagReason.values:
+            raise serializers.ValidationError("Select a supported flag reason.")
+        return value
+
+    def validate_details(self, value):
+        if "<" in value or ">" in value:
+            raise serializers.ValidationError("HTML is not allowed.")
+        return value
+
+
+class AdminReviewDecisionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+
+class AdminServiceReviewSerializer(ServiceReviewSerializer):
+    flags = ServiceReviewFlagSerializer(many=True, read_only=True)
+    moderation_reason = serializers.CharField(read_only=True)
+    creation_ip = serializers.IPAddressField(read_only=True)
+    user_agent = serializers.CharField(read_only=True)
+    risk_flags = serializers.JSONField(read_only=True)
+
+    class Meta(ServiceReviewSerializer.Meta):
+        fields = ServiceReviewSerializer.Meta.fields + [
+            "moderation_reason",
+            "creation_ip",
+            "user_agent",
+            "risk_flags",
+            "flags",
+        ]
+        read_only_fields = fields
 
 
 def validate_provider_submission(provider: ServiceProvider) -> dict:

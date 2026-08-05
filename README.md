@@ -2,7 +2,7 @@
 
 Django REST Framework backend for RealityNG, a diaspora-focused Nigerian PropTech platform.
 
-This repository contains the RealityNG backend through Sprint 9.1 foundations. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, inquiries, viewings, rental applications, verification workflows, the guided assistant framework, dashboard summaries, apartment-share listing support, location-intelligence fields for privacy-safe map discovery, and the verified services marketplace foundation.
+This repository contains the RealityNG backend through Sprint 9.4. It includes authentication and roles, property listing CRUD and moderation, public browsing, property galleries, favorites, inquiries, viewings, rental applications, verification workflows, the guided assistant framework, dashboard summaries, apartment-share listing support, location-intelligence fields for privacy-safe map discovery, and the verified services marketplace with provider profiles, portfolios, quote requests, completed service engagements, reviews, ratings, and trust signals.
 
 ## Repository Structure
 
@@ -11,7 +11,7 @@ This repository contains the RealityNG backend through Sprint 9.1 foundations. I
 |-- apps/
 |   |-- common/          # Shared abstract model primitives
 |   |-- properties/      # Property listings, review workflow, media, public browse API
-|   |-- services/        # Verified services marketplace foundation
+|   |-- services/        # Verified services marketplace, provider profiles, quotes, bookings, reviews
 |   `-- core/            # Health endpoint, request IDs, logging
 |-- config/
 |   |-- settings/        # base.py, local.py, production.py
@@ -119,7 +119,9 @@ Sprint 3 property image endpoints are nested under `/api/v1/properties/{slug}/im
 
 Sprint 8 extends property responses with privacy-safe location metadata for map/list discovery. Public responses expose rounded or hidden coordinates according to each property's location precision. Exact private coordinates remain available only through owner/admin workflows where permitted.
 
-Sprint 9.1 service marketplace endpoints are included under `/api/v1/services/categories/`, `/api/v1/services/providers/`, and `/api/v1/services/providers/{slug}/`. Public responses expose active providers, public service areas, trade categories, and verification badge snapshots only. Private addresses, verification documents, and internal moderation fields are not serialized.
+Sprint 9 service marketplace endpoints are included under `/api/v1/services/`. Public discovery exposes active providers, public service areas, trade categories, portfolio media, verification badge snapshots, published review summaries, and review-derived trust signals only. Private addresses, verification documents, unpublished reviews, internal moderation fields, and fraud metadata are not serialized publicly.
+
+Sprint 9.4 review endpoints include customer review creation under `/api/v1/services/reviews/`, public provider reviews under `/api/v1/services/providers/{provider_slug}/reviews/`, provider review management under `/api/v1/services/provider-profile/reviews/`, and admin moderation under `/api/v1/services/admin/reviews/`.
 
 ## Authentication Flow
 

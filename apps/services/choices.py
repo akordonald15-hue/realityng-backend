@@ -49,6 +49,24 @@ class ServiceBookingStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class ServiceReviewStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PUBLISHED = "published", "Published"
+    FLAGGED = "flagged", "Flagged"
+    HIDDEN = "hidden", "Hidden"
+    DISPUTED = "disputed", "Disputed"
+    REMOVED = "removed", "Removed"
+
+
+class ServiceReviewFlagReason(models.TextChoices):
+    SPAM = "spam", "Spam"
+    ABUSIVE = "abusive", "Abusive"
+    FALSE_INFORMATION = "false_information", "False Information"
+    PRIVACY_CONCERN = "privacy_concern", "Privacy Concern"
+    CONFLICT_OF_INTEREST = "conflict_of_interest", "Conflict of Interest"
+    OTHER = "other", "Other"
+
+
 class PreferredContactMethod(models.TextChoices):
     PHONE = "phone", "Phone"
     EMAIL = "email", "Email"

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
+from django.conf import settings
 from django.db.models import Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -12,7 +16,12 @@ from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle, User
 from rest_framework.views import APIView
 
 from apps.accounts.services import user_is_admin
-from apps.services.choices import ProviderStatus, ProviderTradeStatus
+from apps.services.choices import (
+    ProviderStatus,
+    ProviderTradeStatus,
+    ServiceReviewFlagReason,
+    ServiceReviewStatus,
+)
 from apps.services.filters import PublicServiceProviderFilter
 from apps.services.models import (
     PortfolioImage,
@@ -20,6 +29,8 @@ from apps.services.models import (
     QuoteRequest,
     ServiceArea,
     ServiceProvider,
+    ServiceReview,
+    ServiceReviewFlag,
     TradeCategory,
 )
 from apps.services.permissions import (
@@ -30,11 +41,14 @@ from apps.services.permissions import (
 )
 from apps.services.serializers import (
     AdminDecisionSerializer,
+    AdminReviewDecisionSerializer,
     AdminServiceProviderSerializer,
+    AdminServiceReviewSerializer,
     PortfolioImageMetadataSerializer,
     PortfolioImagePublicSerializer,
     PortfolioImageSerializer,
     PortfolioReorderSerializer,
+    ProviderReviewResponseSerializer,
     ProviderTradeWriteSerializer,
     PublicServiceProviderDetailSerializer,
     PublicServiceProviderListSerializer,
@@ -42,11 +56,16 @@ from apps.services.serializers import (
     QuoteRequestSerializer,
     ServiceAreaWriteSerializer,
     ServiceProviderOwnerSerializer,
+    ServiceReviewCreateSerializer,
+    ServiceReviewFlagSerializer,
+    ServiceReviewPublicSerializer,
+    ServiceReviewSerializer,
+    ServiceReviewUpdateSerializer,
     TradeCategorySerializer,
     active_public_provider_queryset,
     validate_provider_submission,
 )
-from apps.services.services import emit_service_event
+from apps.services.services import emit_service_event, recalculate_provider_rating
 
 
 class ActionScopedThrottleMixin:
@@ -266,6 +285,49 @@ def filter_quote_requests(queryset, request):
     if ordering == "oldest":
         return queryset.order_by("created_at")
     return queryset.order_by("-created_at")
+
+
+def review_queryset():
+    return ServiceReview.objects.select_related(
+        "booking__service_category",
+        "customer",
+        "provider",
+    ).prefetch_related("flags")
+
+
+def filter_reviews(queryset, request):
+    status_value = request.query_params.get("status")
+    provider = request.query_params.get("provider")
+    customer = request.query_params.get("customer")
+    rating = request.query_params.get("rating")
+    flagged = request.query_params.get("flagged")
+    ordering = request.query_params.get("ordering", "newest")
+    if status_value:
+        queryset = queryset.filter(status=status_value)
+    if provider:
+        queryset = queryset.filter(provider_id=provider)
+    if customer:
+        queryset = queryset.filter(customer_id=customer)
+    if rating:
+        queryset = queryset.filter(rating=rating)
+    if flagged in ["true", "1"]:
+        queryset = queryset.filter(flags__deleted_at__isnull=True).distinct()
+    if request.query_params.get("recommended") in ["true", "1"]:
+        queryset = queryset.filter(would_recommend=True)
+    if ordering == "highest":
+        return queryset.order_by("-rating", "-created_at")
+    if ordering == "lowest":
+        return queryset.order_by("rating", "-created_at")
+    if ordering == "oldest":
+        return queryset.order_by("created_at")
+    return queryset.order_by("-created_at")
+
+
+def client_ip(request):
+    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
 
 
 class ProviderTradeManagementViewSet(
@@ -711,6 +773,285 @@ class AdminQuoteRequestViewSet(viewsets.ReadOnlyModelViewSet):
             metadata={"status": quote_request.status},
         )
         return Response(self.get_serializer(quote_request).data)
+
+
+class ServiceReviewViewSet(
+    ActionScopedThrottleMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {
+        "create": "service_review_create",
+        "partial_update": "service_review_update",
+        "respond": "service_review_response",
+        "flag": "service_review_flag",
+    }
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return ServiceReviewCreateSerializer
+        if self.action in ["update", "partial_update"]:
+            return ServiceReviewUpdateSerializer
+        if self.action == "respond":
+            return ProviderReviewResponseSerializer
+        if self.action == "flag":
+            return ServiceReviewFlagSerializer
+        return ServiceReviewSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ServiceReview.objects.none()
+        user = self.request.user
+        if user_is_admin(user):
+            return review_queryset()
+        return review_queryset().filter(Q(customer=user) | Q(provider__user=user))
+
+    def perform_create(self, serializer):
+        review = serializer.save(
+            creation_ip=client_ip(self.request),
+            user_agent=self.request.META.get("HTTP_USER_AGENT", "")[:2000],
+        )
+        emit_service_event(
+            actor=self.request.user,
+            action="service_review.created",
+            entity=review,
+            metadata={"provider_id": str(review.provider_id), "status": review.status},
+        )
+        return review
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        review = self.perform_create(serializer)
+        return Response(
+            ServiceReviewSerializer(review, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        review = self.get_object()
+        if review.customer_id != request.user.id:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        edit_deadline = review.created_at + timedelta(
+            hours=getattr(settings, "SERVICE_REVIEW_EDIT_WINDOW_HOURS", 48)
+        )
+        if review.status != ServiceReviewStatus.PENDING or timezone.now() > edit_deadline:
+            return Response(
+                {"detail": "This review can no longer be edited."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(review, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        emit_service_event(
+            actor=request.user,
+            action="service_review.updated",
+            entity=review,
+            metadata={"status": review.status},
+        )
+        return Response(ServiceReviewSerializer(review, context={"request": request}).data)
+
+    @extend_schema(responses={200: ServiceReviewSerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="my")
+    def my(self, request):
+        queryset = filter_reviews(review_queryset().filter(customer=request.user), request)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = ServiceReviewSerializer(page, many=True, context={"request": request})
+            return self.get_paginated_response(serializer.data)
+        serializer = ServiceReviewSerializer(queryset, many=True, context={"request": request})
+        return Response(serializer.data)
+
+    @extend_schema(
+        request=ProviderReviewResponseSerializer,
+        responses={200: ServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="respond")
+    def respond(self, request, pk=None):
+        review = self.get_object()
+        if review.provider.user_id != request.user.id:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        if review.status != ServiceReviewStatus.PUBLISHED:
+            return Response(
+                {"detail": "Only published reviews can receive provider responses."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if review.provider_response:
+            return Response(
+                {"detail": "This review already has a provider response."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        review.respond(serializer.validated_data["response"])
+        emit_service_event(
+            actor=request.user,
+            action="service_review.provider_responded",
+            entity=review,
+        )
+        return Response(ServiceReviewSerializer(review, context={"request": request}).data)
+
+    @extend_schema(request=ServiceReviewFlagSerializer, responses={200: ServiceReviewSerializer})
+    @action(detail=True, methods=["post"], url_path="flag")
+    def flag(self, request, pk=None):
+        review = self.get_object()
+        if review.status not in [
+            ServiceReviewStatus.PUBLISHED,
+            ServiceReviewStatus.DISPUTED,
+            ServiceReviewStatus.FLAGGED,
+        ]:
+            return Response(
+                {"detail": "This review is not available for flagging."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        flag, created = ServiceReviewFlag.objects.get_or_create(
+            review=review,
+            user=request.user,
+            defaults=serializer.validated_data,
+        )
+        if not created:
+            return Response(
+                {"detail": "You have already flagged this review."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        active_flag_count = review.flags.count()
+        if (
+            active_flag_count >= 3
+            or flag.reason
+            in [
+                ServiceReviewFlagReason.PRIVACY_CONCERN,
+                ServiceReviewFlagReason.CONFLICT_OF_INTEREST,
+            ]
+        ):
+            review.status = ServiceReviewStatus.FLAGGED
+            review.save(update_fields=["status", "updated_at"])
+            recalculate_provider_rating(review.provider)
+        emit_service_event(
+            actor=request.user,
+            action="service_review.flagged",
+            entity=review,
+            metadata={"reason": flag.reason, "flag_count": active_flag_count},
+        )
+        return Response(ServiceReviewSerializer(review, context={"request": request}).data)
+
+
+class PublicProviderReviewViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ServiceReviewPublicSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ServiceReview.objects.none()
+        provider = get_object_or_404(
+            active_public_provider_queryset(),
+            slug=self.kwargs["provider_slug"],
+        )
+        queryset = review_queryset().filter(
+            provider=provider,
+            status=ServiceReviewStatus.PUBLISHED,
+        )
+        return filter_reviews(queryset, self.request)
+
+
+class ProviderReviewViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ServiceReviewSerializer
+    permission_classes = [IsAuthenticated, IsServiceProviderOwner]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ServiceReview.objects.none()
+        provider = get_current_provider(self.request.user)
+        return filter_reviews(review_queryset().filter(provider=provider), self.request)
+
+
+class AdminServiceReviewViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AdminServiceReviewSerializer
+    permission_classes = [IsAuthenticated, IsServicesAdmin]
+
+    def get_queryset(self):
+        return filter_reviews(review_queryset(), self.request)
+
+    def _decision_reason(self, request, required: bool) -> str | Response:
+        serializer = AdminReviewDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get("reason", "").strip()
+        if required and not reason:
+            return Response({"reason": ["A moderation reason is required."]}, status=400)
+        return reason
+
+    def _return_review(self, request, review, action_name):
+        recalculate_provider_rating(review.provider)
+        emit_service_event(
+            actor=request.user,
+            action=action_name,
+            entity=review,
+            metadata={"status": review.status},
+        )
+        return Response(self.get_serializer(review).data)
+
+    @extend_schema(
+        request=AdminReviewDecisionSerializer,
+        responses={200: AdminServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="publish")
+    def publish(self, request, pk=None):
+        review = self.get_object()
+        review.publish()
+        return self._return_review(request, review, "service_review.published")
+
+    @extend_schema(
+        request=AdminReviewDecisionSerializer,
+        responses={200: AdminServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="hide")
+    def hide(self, request, pk=None):
+        review = self.get_object()
+        reason = self._decision_reason(request, required=True)
+        if isinstance(reason, Response):
+            return reason
+        review.hide(reason)
+        return self._return_review(request, review, "service_review.hidden")
+
+    @extend_schema(
+        request=AdminReviewDecisionSerializer,
+        responses={200: AdminServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        review = self.get_object()
+        review.restore()
+        return self._return_review(request, review, "service_review.restored")
+
+    @extend_schema(
+        request=AdminReviewDecisionSerializer,
+        responses={200: AdminServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="remove")
+    def remove(self, request, pk=None):
+        review = self.get_object()
+        reason = self._decision_reason(request, required=True)
+        if isinstance(reason, Response):
+            return reason
+        review.remove(reason)
+        return self._return_review(request, review, "service_review.removed")
+
+    @extend_schema(
+        request=AdminReviewDecisionSerializer,
+        responses={200: AdminServiceReviewSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="mark-disputed")
+    def mark_disputed(self, request, pk=None):
+        review = self.get_object()
+        reason = self._decision_reason(request, required=True)
+        if isinstance(reason, Response):
+            return reason
+        review.mark_disputed(reason)
+        return self._return_review(request, review, "service_review.disputed")
 
     @extend_schema(responses={200: QuoteRequestSerializer})
     @action(detail=True, methods=["post"], url_path="cancel")

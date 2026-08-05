@@ -4,16 +4,20 @@ from rest_framework.routers import DefaultRouter
 from apps.services.views import (
     AdminQuoteRequestViewSet,
     AdminServiceProviderViewSet,
+    AdminServiceReviewViewSet,
     PortfolioImageManagementViewSet,
     ProviderProfileDeactivateView,
     ProviderProfileMeView,
     ProviderProfileSubmitView,
     ProviderProfileView,
     ProviderQuoteRequestViewSet,
+    ProviderReviewViewSet,
     ProviderTradeManagementViewSet,
+    PublicProviderReviewViewSet,
     PublicQuoteRequestCreateViewSet,
     PublicServiceProviderViewSet,
     ServiceAreaManagementViewSet,
+    ServiceReviewViewSet,
     TradeCategoryViewSet,
 )
 
@@ -50,8 +54,24 @@ router.register(
     AdminQuoteRequestViewSet,
     basename="service-admin-quote-requests",
 )
+router.register("services/reviews", ServiceReviewViewSet, basename="service-reviews")
+router.register(
+    "services/provider-profile/reviews",
+    ProviderReviewViewSet,
+    basename="service-provider-profile-reviews",
+)
+router.register(
+    "services/admin/reviews",
+    AdminServiceReviewViewSet,
+    basename="service-admin-reviews",
+)
 
 urlpatterns = [
+    path(
+        "services/providers/<slug:provider_slug>/reviews/",
+        PublicProviderReviewViewSet.as_view({"get": "list"}),
+        name="service-provider-reviews",
+    ),
     path(
         "services/providers/<slug:provider_slug>/quote-requests/",
         PublicQuoteRequestCreateViewSet.as_view({"post": "create"}),
