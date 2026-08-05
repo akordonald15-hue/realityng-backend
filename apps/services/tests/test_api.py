@@ -5,17 +5,25 @@ from rest_framework import status
 
 from apps.accounts.models import AuditLog, UserRole
 from apps.services.choices import (
+    ProviderAppealStatus,
+    ProviderAppealType,
     ProviderStatus,
+    ProviderSuspensionType,
     ProviderType,
     QuoteRequestStatus,
+    ServiceComplaintCategory,
+    ServiceComplaintStatus,
+    ServiceComplaintType,
     ServiceReviewFlagReason,
     ServiceReviewStatus,
 )
 from apps.services.models import (
     PortfolioImage,
+    ProviderAppeal,
     ProviderTrade,
     QuoteRequest,
     ServiceBooking,
+    ServiceComplaint,
     ServiceProvider,
     ServiceReview,
 )
@@ -966,3 +974,178 @@ def test_admin_services_dashboard_requires_admin_and_summarizes_global_queues(
     assert response.data["quote_status_counts"][QuoteRequestStatus.SUBMITTED] == 1
     assert response.data["review_status_counts"][ServiceReviewStatus.PENDING] == 1
     assert response.data["open_quote_requests"][0]["id"] == str(quote.id)
+
+
+@pytest.mark.django_db
+def test_customer_can_create_and_view_only_own_service_complaints(
+    api_client,
+    active_provider,
+    other_user,
+    admin_user,
+):
+    api_client.force_authenticate(user=other_user)
+    create_response = api_client.post(
+        reverse("service-complaints-list"),
+        {
+            "provider_id": str(active_provider.id),
+            "complaint_type": ServiceComplaintType.CUSTOMER,
+            "category": ServiceComplaintCategory.SERVICE_QUALITY,
+            "subject": "Provider missed agreed scope",
+            "description": "The repair was incomplete and needs admin review.",
+        },
+        format="json",
+    )
+
+    assert create_response.status_code == status.HTTP_201_CREATED
+    assert create_response.data["status"] == ServiceComplaintStatus.OPEN
+    assert AuditLog.objects.filter(action="service_complaint.created").exists()
+
+    api_client.force_authenticate(user=admin_user)
+    ServiceComplaint.objects.create(
+        complainant=admin_user,
+        provider=active_provider,
+        complaint_type=ServiceComplaintType.CUSTOMER,
+        category=ServiceComplaintCategory.OTHER,
+        subject="Separate complaint",
+        description="Should not appear for the customer.",
+    )
+
+    api_client.force_authenticate(user=other_user)
+    list_response = api_client.get(reverse("service-complaints-list"))
+
+    assert list_response.status_code == status.HTTP_200_OK
+    assert list_response.data["count"] == 1
+    assert list_response.data["results"][0]["subject"] == "Provider missed agreed scope"
+
+
+@pytest.mark.django_db
+def test_admin_can_resolve_service_complaint_and_normal_user_cannot(
+    api_client,
+    active_provider,
+    other_user,
+    admin_user,
+):
+    complaint = ServiceComplaint.objects.create(
+        complainant=other_user,
+        provider=active_provider,
+        complaint_type=ServiceComplaintType.CUSTOMER,
+        category=ServiceComplaintCategory.SAFETY,
+        subject="Unsafe conduct",
+        description="Needs operational review.",
+    )
+
+    api_client.force_authenticate(user=other_user)
+    denied_response = api_client.post(
+        reverse("service-admin-complaints-resolve", args=[complaint.id]),
+        {"notes": "Resolved"},
+        format="json",
+    )
+    assert denied_response.status_code == status.HTTP_403_FORBIDDEN
+
+    api_client.force_authenticate(user=admin_user)
+    response = api_client.post(
+        reverse("service-admin-complaints-resolve", args=[complaint.id]),
+        {"notes": "Provider supplied correction evidence."},
+        format="json",
+    )
+    complaint.refresh_from_db()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert complaint.status == ServiceComplaintStatus.RESOLVED
+    assert complaint.resolved_at is not None
+    assert AuditLog.objects.filter(action="service_complaint.resolved").exists()
+
+
+@pytest.mark.django_db
+def test_admin_warning_and_suspension_hide_provider_and_block_actions(
+    api_client,
+    active_provider,
+    admin_user,
+    other_user,
+):
+    api_client.force_authenticate(user=admin_user)
+    warn_response = api_client.post(
+        reverse("service-admin-providers-warn", args=[active_provider.id]),
+        {"reason": "Late responses to customer complaints."},
+        format="json",
+    )
+    suspend_response = api_client.post(
+        reverse("service-admin-providers-suspend", args=[active_provider.id]),
+        {
+            "reason": "Repeated unresolved complaints.",
+            "suspension_type": ProviderSuspensionType.PERMANENT,
+        },
+        format="json",
+    )
+    active_provider.refresh_from_db()
+
+    assert warn_response.status_code == status.HTTP_200_OK
+    assert suspend_response.status_code == status.HTTP_200_OK
+    assert active_provider.warning_count == 1
+    assert active_provider.status == ProviderStatus.SUSPENDED
+    assert AuditLog.objects.filter(action="service_provider.warned").exists()
+    assert AuditLog.objects.filter(action="service_provider.suspended").exists()
+
+    api_client.force_authenticate(user=None)
+    public_response = api_client.get(
+        reverse("service-providers-detail", args=[active_provider.slug])
+    )
+    assert public_response.status_code == status.HTTP_404_NOT_FOUND
+
+    quote = QuoteRequest.objects.create(
+        customer=other_user,
+        customer_name="Customer User",
+        provider=active_provider,
+        project_title="Suspended provider quote",
+        project_description="The provider should not be able to advance this.",
+        phone="+2348000000001",
+        email="customer@example.com",
+        state="Lagos",
+    )
+    api_client.force_authenticate(user=active_provider.user)
+    quote_response = api_client.post(
+        reverse("service-provider-profile-quote-requests-mark-responded", args=[quote.id])
+    )
+
+    assert quote_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_provider_can_appeal_suspension_and_admin_can_approve(
+    api_client,
+    active_provider,
+    admin_user,
+):
+    active_provider.suspend(
+        reviewer=admin_user,
+        reason="Temporary governance hold.",
+        suspension_type=ProviderSuspensionType.PERMANENT,
+    )
+    api_client.force_authenticate(user=active_provider.user)
+    appeal_response = api_client.post(
+        reverse("service-provider-profile-appeals-list"),
+        {
+            "appeal_type": ProviderAppealType.SUSPENSION,
+            "reason": "I have resolved the issue and request reinstatement.",
+        },
+        format="json",
+    )
+
+    assert appeal_response.status_code == status.HTTP_201_CREATED
+    appeal = ProviderAppeal.objects.get(id=appeal_response.data["id"])
+    assert appeal.status == ProviderAppealStatus.SUBMITTED
+    assert AuditLog.objects.filter(action="service_provider.appeal_submitted").exists()
+
+    api_client.force_authenticate(user=admin_user)
+    approve_response = api_client.post(
+        reverse("service-admin-appeals-approve", args=[appeal.id]),
+        {"notes": "Approved after evidence review."},
+        format="json",
+    )
+    active_provider.refresh_from_db()
+    appeal.refresh_from_db()
+
+    assert approve_response.status_code == status.HTTP_200_OK
+    assert appeal.status == ProviderAppealStatus.APPROVED
+    assert active_provider.status == ProviderStatus.ACTIVE
+    assert AuditLog.objects.filter(action="service_provider.appeal_approved").exists()

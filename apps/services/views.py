@@ -17,20 +17,25 @@ from rest_framework.views import APIView
 
 from apps.accounts.services import user_is_admin
 from apps.services.choices import (
+    ProviderAppealStatus,
     ProviderStatus,
+    ProviderSuspensionType,
     ProviderTradeStatus,
     QuoteRequestStatus,
     ServiceBookingStatus,
+    ServiceComplaintStatus,
     ServiceReviewFlagReason,
     ServiceReviewStatus,
 )
 from apps.services.filters import PublicServiceProviderFilter
 from apps.services.models import (
     PortfolioImage,
+    ProviderAppeal,
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
     ServiceBooking,
+    ServiceComplaint,
     ServiceProvider,
     ServiceReview,
     ServiceReviewFlag,
@@ -43,8 +48,11 @@ from apps.services.permissions import (
     PublicReadOrAdminOnly,
 )
 from apps.services.serializers import (
+    AdminAppealDecisionSerializer,
+    AdminComplaintDecisionSerializer,
     AdminDecisionSerializer,
     AdminReviewDecisionSerializer,
+    AdminServiceComplaintSerializer,
     AdminServiceProviderSerializer,
     AdminServiceReviewSerializer,
     AdminServicesDashboardSerializer,
@@ -53,6 +61,7 @@ from apps.services.serializers import (
     PortfolioImagePublicSerializer,
     PortfolioImageSerializer,
     PortfolioReorderSerializer,
+    ProviderAppealSerializer,
     ProviderReviewResponseSerializer,
     ProviderServicesDashboardSerializer,
     ProviderTradeWriteSerializer,
@@ -61,6 +70,9 @@ from apps.services.serializers import (
     QuoteRequestCreateSerializer,
     QuoteRequestSerializer,
     ServiceAreaWriteSerializer,
+    ServiceComplaintCreateSerializer,
+    ServiceComplaintEvidenceSerializer,
+    ServiceComplaintSerializer,
     ServiceProviderOwnerSerializer,
     ServiceReviewCreateSerializer,
     ServiceReviewFlagSerializer,
@@ -301,6 +313,62 @@ def review_queryset():
     ).prefetch_related("flags")
 
 
+def complaint_queryset():
+    return ServiceComplaint.objects.select_related(
+        "complainant",
+        "provider",
+        "quote_request",
+        "review",
+        "booking",
+        "assigned_admin",
+    ).prefetch_related("evidence__uploaded_by")
+
+
+def appeal_queryset():
+    return ProviderAppeal.objects.select_related(
+        "provider",
+        "submitted_by",
+        "decided_by",
+    )
+
+
+def filter_complaints(queryset, request):
+    status_value = request.query_params.get("status")
+    category = request.query_params.get("category")
+    provider = request.query_params.get("provider")
+    search = request.query_params.get("search")
+    ordering = request.query_params.get("ordering", "newest")
+    if status_value:
+        queryset = queryset.filter(status=status_value)
+    if category:
+        queryset = queryset.filter(category=category)
+    if provider:
+        queryset = queryset.filter(provider_id=provider)
+    if search:
+        queryset = queryset.filter(
+            Q(subject__icontains=search)
+            | Q(description__icontains=search)
+            | Q(provider__business_name__icontains=search)
+            | Q(complainant__email__icontains=search)
+        )
+    if ordering == "oldest":
+        return queryset.order_by("created_at")
+    return queryset.order_by("-created_at")
+
+
+def filter_appeals(queryset, request):
+    status_value = request.query_params.get("status")
+    appeal_type = request.query_params.get("appeal_type")
+    provider = request.query_params.get("provider")
+    if status_value:
+        queryset = queryset.filter(status=status_value)
+    if appeal_type:
+        queryset = queryset.filter(appeal_type=appeal_type)
+    if provider:
+        queryset = queryset.filter(provider_id=provider)
+    return queryset.order_by("-created_at")
+
+
 def count_by_status(queryset, choices) -> dict[str, int]:
     counts = dict.fromkeys([choice.value for choice in choices], 0)
     for item in queryset.values("status").annotate(total=Count("id")):
@@ -367,6 +435,295 @@ def client_ip(request):
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
+
+
+class ServiceComplaintViewSet(
+    ActionScopedThrottleMixin,
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {"create": "service_complaint_create"}
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return ServiceComplaintCreateSerializer
+        return ServiceComplaintSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ServiceComplaint.objects.none()
+        queryset = complaint_queryset().filter(complainant=self.request.user)
+        return filter_complaints(queryset, self.request)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        complaint = serializer.save()
+        emit_service_event(
+            actor=request.user,
+            action="service_complaint.created",
+            entity=complaint,
+            metadata={
+                "provider_id": str(complaint.provider_id),
+                "category": complaint.category,
+                "status": complaint.status,
+            },
+        )
+        return Response(
+            ServiceComplaintSerializer(complaint, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        request=ServiceComplaintEvidenceSerializer,
+        responses={201: ServiceComplaintEvidenceSerializer},
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="evidence",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def add_evidence(self, request, pk=None):
+        complaint = self.get_object()
+        serializer = ServiceComplaintEvidenceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        evidence = serializer.save(complaint=complaint, uploaded_by=request.user)
+        emit_service_event(
+            actor=request.user,
+            action="service_complaint.evidence_uploaded",
+            entity=complaint,
+            metadata={"evidence_id": str(evidence.id)},
+        )
+        return Response(
+            ServiceComplaintEvidenceSerializer(evidence, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ProviderComplaintViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = ServiceComplaintSerializer
+    permission_classes = [IsAuthenticated, IsServiceProviderOwner]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ServiceComplaint.objects.none()
+        provider = get_current_provider(self.request.user)
+        queryset = complaint_queryset().filter(
+            Q(provider=provider) | Q(complainant=self.request.user)
+        )
+        return filter_complaints(queryset.distinct(), self.request)
+
+
+class ProviderAppealViewSet(
+    ActionScopedThrottleMixin,
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    serializer_class = ProviderAppealSerializer
+    permission_classes = [IsAuthenticated, IsServiceProviderOwner]
+    throttle_scope_by_action = {"create": "service_provider_appeal_create"}
+
+    def get_provider(self):
+        return get_current_provider(self.request.user)
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ProviderAppeal.objects.none()
+        return filter_appeals(appeal_queryset().filter(provider=self.get_provider()), self.request)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if not getattr(self, "swagger_fake_view", False):
+            context["provider"] = self.get_provider()
+        return context
+
+    def perform_create(self, serializer):
+        provider = self.get_provider()
+        appeal = serializer.save(provider=provider, submitted_by=self.request.user)
+        provider.appeal_status = appeal.status
+        provider.save(update_fields=["appeal_status", "updated_at"])
+        emit_service_event(
+            actor=self.request.user,
+            action="service_provider.appeal_submitted",
+            entity=appeal,
+            metadata={"provider_id": str(provider.id), "appeal_type": appeal.appeal_type},
+        )
+
+
+class AdminServiceComplaintViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AdminServiceComplaintSerializer
+    permission_classes = [IsAuthenticated, IsServicesAdmin]
+    filterset_fields = ["status", "category", "complaint_type", "provider"]
+    search_fields = ["subject", "description", "provider__business_name", "complainant__email"]
+    ordering_fields = ["created_at", "updated_at", "status"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        return filter_complaints(complaint_queryset(), self.request)
+
+    def _decision_serializer(self):
+        serializer = AdminComplaintDecisionSerializer(data=self.request.data)
+        serializer.is_valid(raise_exception=True)
+        return serializer
+
+    def _transition(self, request, complaint, status_value, event_name, requires_notes=False):
+        serializer = self._decision_serializer()
+        notes = serializer.validated_data.get("notes", "").strip()
+        admin_notes = serializer.validated_data.get("admin_notes", "").strip()
+        if requires_notes and not notes:
+            return Response({"notes": ["Notes are required for this action."]}, status=400)
+        complaint.set_status(new_status=status_value, actor=request.user, notes=notes)
+        if admin_notes:
+            complaint.admin_notes = admin_notes
+            complaint.save(update_fields=["admin_notes", "updated_at"])
+        emit_service_event(
+            actor=request.user,
+            action=event_name,
+            entity=complaint,
+            metadata={"status": complaint.status},
+        )
+        return Response(self.get_serializer(complaint).data)
+
+    @action(detail=True, methods=["post"])
+    def review(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.UNDER_REVIEW,
+            "service_complaint.under_review",
+        )
+
+    @action(detail=True, methods=["post"])
+    def resolve(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.RESOLVED,
+            "service_complaint.resolved",
+            requires_notes=True,
+        )
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.REJECTED,
+            "service_complaint.rejected",
+            requires_notes=True,
+        )
+
+    @action(detail=True, methods=["post"])
+    def escalate(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.ESCALATED,
+            "service_complaint.escalated",
+            requires_notes=True,
+        )
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.CLOSED,
+            "service_complaint.closed",
+        )
+
+    @action(detail=True, methods=["post"], url_path="await-customer")
+    def await_customer(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.AWAITING_CUSTOMER,
+            "service_complaint.awaiting_customer",
+        )
+
+    @action(detail=True, methods=["post"], url_path="await-provider")
+    def await_provider(self, request, pk=None):
+        return self._transition(
+            request,
+            self.get_object(),
+            ServiceComplaintStatus.AWAITING_PROVIDER,
+            "service_complaint.awaiting_provider",
+        )
+
+
+class AdminProviderAppealViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ProviderAppealSerializer
+    permission_classes = [IsAuthenticated, IsServicesAdmin]
+    filterset_fields = ["status", "appeal_type", "provider"]
+    search_fields = ["reason", "provider__business_name", "submitted_by__email"]
+    ordering_fields = ["created_at", "updated_at", "status"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        return filter_appeals(appeal_queryset(), self.request)
+
+    def _decision_serializer(self):
+        serializer = AdminAppealDecisionSerializer(data=self.request.data)
+        serializer.is_valid(raise_exception=True)
+        return serializer
+
+    def _decide(self, request, appeal, status_value, event_name):
+        serializer = self._decision_serializer()
+        appeal.decide(
+            status_value=status_value,
+            actor=request.user,
+            notes=serializer.validated_data.get("notes", "").strip(),
+        )
+        if status_value == ProviderAppealStatus.APPROVED:
+            if appeal.appeal_type == "suspension":
+                appeal.provider.reactivate(reviewer=request.user)
+            else:
+                appeal.provider.last_warning_reason = ""
+                appeal.provider.save(update_fields=["last_warning_reason", "updated_at"])
+        emit_service_event(
+            actor=request.user,
+            action=event_name,
+            entity=appeal,
+            metadata={"status": appeal.status, "provider_id": str(appeal.provider_id)},
+        )
+        return Response(self.get_serializer(appeal).data)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        return self._decide(
+            request,
+            self.get_object(),
+            ProviderAppealStatus.APPROVED,
+            "service_provider.appeal_approved",
+        )
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        return self._decide(
+            request,
+            self.get_object(),
+            ProviderAppealStatus.REJECTED,
+            "service_provider.appeal_rejected",
+        )
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        return self._decide(
+            request,
+            self.get_object(),
+            ProviderAppealStatus.REOPENED,
+            "service_provider.appeal_reopened",
+        )
 
 
 class CustomerServicesDashboardView(APIView):
@@ -1055,20 +1412,63 @@ class AdminServiceProviderViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(self.get_serializer(provider).data)
 
     @action(detail=True, methods=["post"])
+    def warn(self, request, pk=None):
+        provider = self.get_object()
+        if response := self._ensure_not_self_review(provider):
+            return response
+        serializer = self._decision_serializer()
+        reason = serializer.validated_data.get("reason", "").strip()
+        if not reason:
+            return Response({"reason": ["Warning reason is required."]}, status=400)
+        provider.warn(reviewer=request.user, reason=reason)
+        provider.review_notes = serializer.validated_data.get("review_notes", "")
+        provider.save(update_fields=["review_notes", "updated_at"])
+        emit_service_event(
+            actor=request.user,
+            action="service_provider.warned",
+            entity=provider,
+            metadata={"reason": reason, "warning_count": provider.warning_count},
+        )
+        return Response(self.get_serializer(provider).data)
+
+    @action(detail=True, methods=["post"])
     def suspend(self, request, pk=None):
         provider = self.get_object()
+        if response := self._ensure_not_self_review(provider):
+            return response
         serializer = self._decision_serializer()
         reason = serializer.validated_data.get("reason", "").strip()
         if not reason:
             return Response({"reason": ["Suspension reason is required."]}, status=400)
-        provider.suspend(reviewer=request.user, reason=reason)
+        suspension_type = serializer.validated_data.get(
+            "suspension_type",
+            ProviderSuspensionType.TEMPORARY,
+        )
+        expires_at = serializer.validated_data.get("suspension_expires_at")
+        if suspension_type == ProviderSuspensionType.TEMPORARY and not expires_at:
+            return Response(
+                {"suspension_expires_at": ["Temporary suspensions require an expiry time."]},
+                status=400,
+            )
+        if suspension_type == ProviderSuspensionType.PERMANENT:
+            expires_at = None
+        provider.suspend(
+            reviewer=request.user,
+            reason=reason,
+            suspension_type=suspension_type,
+            expires_at=expires_at,
+        )
         provider.review_notes = serializer.validated_data.get("review_notes", "")
         provider.save(update_fields=["review_notes", "updated_at"])
         emit_service_event(
             actor=request.user,
             action="service_provider.suspended",
             entity=provider,
-            metadata={"reason": reason},
+            metadata={
+                "reason": reason,
+                "suspension_type": suspension_type,
+                "expires_at": expires_at.isoformat() if expires_at else "",
+            },
         )
         return Response(self.get_serializer(provider).data)
 
@@ -1142,6 +1542,11 @@ class ProviderQuoteRequestViewSet(
 
     def _transition(self, request, quote_request, action_name):
         self.check_object_permissions(request, quote_request)
+        if quote_request.provider.status == ProviderStatus.SUSPENDED:
+            return Response(
+                {"detail": "Suspended providers cannot manage quote request status."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if action_name == "viewed":
             quote_request.mark_viewed()
             event = "service_quote.viewed"
@@ -1299,6 +1704,11 @@ class ServiceReviewViewSet(
         review = self.get_object()
         if review.provider.user_id != request.user.id:
             return Response(status=status.HTTP_403_FORBIDDEN)
+        if review.provider.status == ProviderStatus.SUSPENDED:
+            return Response(
+                {"detail": "Suspended providers cannot respond to reviews."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if review.status != ServiceReviewStatus.PUBLISHED:
             return Response(
                 {"detail": "Only published reviews can receive provider responses."},

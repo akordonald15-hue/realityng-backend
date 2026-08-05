@@ -144,6 +144,14 @@ REST_FRAMEWORK = {
             default="20/hour",
         ),
         "service_review_flag": env("DRF_THROTTLE_SERVICE_REVIEW_FLAG_RATE", default="20/hour"),
+        "service_complaint_create": env(
+            "DRF_THROTTLE_SERVICE_COMPLAINT_CREATE_RATE",
+            default="10/hour",
+        ),
+        "service_provider_appeal_create": env(
+            "DRF_THROTTLE_SERVICE_PROVIDER_APPEAL_CREATE_RATE",
+            default="5/hour",
+        ),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }

@@ -2,12 +2,16 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from apps.services.views import (
+    AdminProviderAppealViewSet,
     AdminQuoteRequestViewSet,
+    AdminServiceComplaintViewSet,
     AdminServiceProviderViewSet,
     AdminServiceReviewViewSet,
     AdminServicesDashboardView,
     CustomerServicesDashboardView,
     PortfolioImageManagementViewSet,
+    ProviderAppealViewSet,
+    ProviderComplaintViewSet,
     ProviderProfileDeactivateView,
     ProviderProfileMeView,
     ProviderProfileSubmitView,
@@ -20,6 +24,7 @@ from apps.services.views import (
     PublicQuoteRequestCreateViewSet,
     PublicServiceProviderViewSet,
     ServiceAreaManagementViewSet,
+    ServiceComplaintViewSet,
     ServiceReviewViewSet,
     TradeCategoryViewSet,
 )
@@ -58,15 +63,36 @@ router.register(
     basename="service-admin-quote-requests",
 )
 router.register("services/reviews", ServiceReviewViewSet, basename="service-reviews")
+router.register("services/complaints", ServiceComplaintViewSet, basename="service-complaints")
 router.register(
     "services/provider-profile/reviews",
     ProviderReviewViewSet,
     basename="service-provider-profile-reviews",
 )
 router.register(
+    "services/provider-profile/complaints",
+    ProviderComplaintViewSet,
+    basename="service-provider-profile-complaints",
+)
+router.register(
+    "services/provider-profile/appeals",
+    ProviderAppealViewSet,
+    basename="service-provider-profile-appeals",
+)
+router.register(
     "services/admin/reviews",
     AdminServiceReviewViewSet,
     basename="service-admin-reviews",
+)
+router.register(
+    "services/admin/complaints",
+    AdminServiceComplaintViewSet,
+    basename="service-admin-complaints",
+)
+router.register(
+    "services/admin/appeals",
+    AdminProviderAppealViewSet,
+    basename="service-admin-appeals",
 )
 
 urlpatterns = [

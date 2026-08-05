@@ -13,18 +13,27 @@ from apps.properties.serializers import build_media_url
 from apps.services.choices import (
     PortfolioImageStatus,
     PreferredContactMethod,
+    ProviderAppealStatus,
+    ProviderAppealType,
     ProviderStatus,
+    ProviderSuspensionType,
     ProviderTradeStatus,
     QuoteRequestStatus,
+    ServiceComplaintCategory,
+    ServiceComplaintStatus,
+    ServiceComplaintType,
     ServiceReviewFlagReason,
     ServiceReviewStatus,
 )
 from apps.services.models import (
     PortfolioImage,
+    ProviderAppeal,
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
     ServiceBooking,
+    ServiceComplaint,
+    ServiceComplaintEvidence,
     ServiceProvider,
     ServiceReview,
     ServiceReviewFlag,
@@ -307,6 +316,11 @@ class ServiceProviderOwnerSerializer(serializers.ModelSerializer):
             "rejection_reason",
             "more_info_message",
             "suspended_reason",
+            "warning_count",
+            "last_warning_reason",
+            "suspension_type",
+            "suspension_expires_at",
+            "appeal_status",
             "trades",
             "service_areas",
             "portfolio_count",
@@ -328,6 +342,11 @@ class ServiceProviderOwnerSerializer(serializers.ModelSerializer):
             "rejection_reason",
             "more_info_message",
             "suspended_reason",
+            "warning_count",
+            "last_warning_reason",
+            "suspension_type",
+            "suspension_expires_at",
+            "appeal_status",
             "trades",
             "service_areas",
             "portfolio_count",
@@ -606,6 +625,12 @@ class AdminDecisionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True)
     message = serializers.CharField(required=False, allow_blank=True)
     review_notes = serializers.CharField(required=False, allow_blank=True)
+    suspension_type = serializers.ChoiceField(
+        choices=ProviderSuspensionType.choices,
+        required=False,
+        default=ProviderSuspensionType.TEMPORARY,
+    )
+    suspension_expires_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
 class QuoteProviderSummarySerializer(serializers.ModelSerializer):
@@ -971,6 +996,249 @@ class AdminServiceReviewSerializer(ServiceReviewSerializer):
             "flags",
         ]
         read_only_fields = fields
+
+
+class ServiceComplaintEvidenceSerializer(serializers.ModelSerializer):
+    uploaded_by_email = serializers.EmailField(source="uploaded_by.email", read_only=True)
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceComplaintEvidence
+        fields = [
+            "id",
+            "file",
+            "file_url",
+            "caption",
+            "uploaded_by",
+            "uploaded_by_email",
+            "created_at",
+        ]
+        read_only_fields = ["id", "file_url", "uploaded_by", "uploaded_by_email", "created_at"]
+
+    def get_file_url(self, obj: ServiceComplaintEvidence) -> str:
+        request = self.context.get("request")
+        return build_media_url(obj.file, request)
+
+
+class ServiceComplaintSerializer(serializers.ModelSerializer):
+    provider = QuoteProviderSummarySerializer(read_only=True)
+    evidence = ServiceComplaintEvidenceSerializer(many=True, read_only=True)
+    complainant_email = serializers.EmailField(source="complainant.email", read_only=True)
+    assigned_admin_email = serializers.EmailField(source="assigned_admin.email", read_only=True)
+
+    class Meta:
+        model = ServiceComplaint
+        fields = [
+            "id",
+            "complainant",
+            "complainant_email",
+            "provider",
+            "quote_request",
+            "review",
+            "booking",
+            "complaint_type",
+            "category",
+            "subject",
+            "description",
+            "status",
+            "assigned_admin",
+            "assigned_admin_email",
+            "resolution_notes",
+            "resolved_at",
+            "rejected_at",
+            "escalated_at",
+            "closed_at",
+            "evidence",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "complainant",
+            "complainant_email",
+            "provider",
+            "status",
+            "assigned_admin",
+            "assigned_admin_email",
+            "resolution_notes",
+            "resolved_at",
+            "rejected_at",
+            "escalated_at",
+            "closed_at",
+            "evidence",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class AdminServiceComplaintSerializer(ServiceComplaintSerializer):
+    admin_notes = serializers.CharField(read_only=True)
+
+    class Meta(ServiceComplaintSerializer.Meta):
+        fields = ServiceComplaintSerializer.Meta.fields + ["admin_notes"]
+        read_only_fields = ServiceComplaintSerializer.Meta.read_only_fields + ["admin_notes"]
+
+
+class ServiceComplaintCreateSerializer(serializers.ModelSerializer):
+    provider_id = serializers.UUIDField(write_only=True)
+    quote_request_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+    review_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+    booking_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+
+    class Meta:
+        model = ServiceComplaint
+        fields = [
+            "provider_id",
+            "quote_request_id",
+            "review_id",
+            "booking_id",
+            "complaint_type",
+            "category",
+            "subject",
+            "description",
+        ]
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        provider_id = attrs.pop("provider_id")
+        provider = ServiceProvider.objects.filter(id=provider_id).first()
+        if not provider:
+            raise serializers.ValidationError({"provider_id": ["Provider was not found."]})
+        if attrs.get("complaint_type") not in ServiceComplaintType.values:
+            raise serializers.ValidationError({"complaint_type": ["Select a valid type."]})
+        if attrs.get("category") not in ServiceComplaintCategory.values:
+            raise serializers.ValidationError({"category": ["Select a valid category."]})
+        if "<" in attrs.get("subject", "") or ">" in attrs.get("subject", ""):
+            raise serializers.ValidationError({"subject": ["HTML is not allowed."]})
+        if "<" in attrs.get("description", "") or ">" in attrs.get("description", ""):
+            raise serializers.ValidationError({"description": ["HTML is not allowed."]})
+
+        quote_request_id = attrs.pop("quote_request_id", None)
+        review_id = attrs.pop("review_id", None)
+        booking_id = attrs.pop("booking_id", None)
+        if quote_request_id:
+            quote_request = QuoteRequest.objects.filter(id=quote_request_id).first()
+            if not quote_request or quote_request.provider_id != provider.id:
+                raise serializers.ValidationError(
+                    {"quote_request_id": ["Quote request does not match this provider."]}
+                )
+            if quote_request.customer_id and quote_request.customer_id != request.user.id:
+                if quote_request.provider.user_id != request.user.id:
+                    raise serializers.ValidationError(
+                        {"quote_request_id": ["You cannot complain about this quote request."]}
+                    )
+            attrs["quote_request"] = quote_request
+        if review_id:
+            review = ServiceReview.objects.filter(id=review_id).first()
+            if not review or review.provider_id != provider.id:
+                raise serializers.ValidationError(
+                    {"review_id": ["Review does not match this provider."]}
+                )
+            if review.customer_id != request.user.id and review.provider.user_id != request.user.id:
+                raise serializers.ValidationError(
+                    {"review_id": ["You cannot complain about this review."]}
+                )
+            attrs["review"] = review
+        if booking_id:
+            booking = ServiceBooking.objects.filter(id=booking_id).first()
+            if not booking or booking.provider_id != provider.id:
+                raise serializers.ValidationError(
+                    {"booking_id": ["Booking does not match this provider."]}
+                )
+            if (
+                booking.customer_id != request.user.id
+                and booking.provider.user_id != request.user.id
+            ):
+                raise serializers.ValidationError(
+                    {"booking_id": ["You cannot complain about this booking."]}
+                )
+            attrs["booking"] = booking
+
+        if provider.user_id == request.user.id:
+            attrs["complaint_type"] = ServiceComplaintType.PROVIDER
+        attrs["provider"] = provider
+        attrs["complainant"] = request.user
+        return attrs
+
+
+class AdminComplaintDecisionSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=ServiceComplaintStatus.choices, required=False)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=1600)
+    admin_notes = serializers.CharField(required=False, allow_blank=True, max_length=1600)
+
+
+class ProviderAppealSerializer(serializers.ModelSerializer):
+    provider = QuoteProviderSummarySerializer(read_only=True)
+    submitted_by_email = serializers.EmailField(source="submitted_by.email", read_only=True)
+    decided_by_email = serializers.EmailField(source="decided_by.email", read_only=True)
+
+    class Meta:
+        model = ProviderAppeal
+        fields = [
+            "id",
+            "provider",
+            "submitted_by",
+            "submitted_by_email",
+            "appeal_type",
+            "reason",
+            "status",
+            "admin_notes",
+            "decided_by",
+            "decided_by_email",
+            "decided_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "provider",
+            "submitted_by",
+            "submitted_by_email",
+            "status",
+            "admin_notes",
+            "decided_by",
+            "decided_by_email",
+            "decided_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        provider = self.context["provider"]
+        appeal_type = attrs.get("appeal_type")
+        if appeal_type not in ProviderAppealType.values:
+            raise serializers.ValidationError({"appeal_type": ["Select a valid appeal type."]})
+        if (
+            appeal_type == ProviderAppealType.SUSPENSION
+            and provider.status != ProviderStatus.SUSPENDED
+        ):
+            raise serializers.ValidationError(
+                {"appeal_type": ["Only suspended providers can submit a suspension appeal."]}
+            )
+        if appeal_type == ProviderAppealType.WARNING and not provider.warning_count:
+            raise serializers.ValidationError(
+                {"appeal_type": ["A warning must exist before it can be appealed."]}
+            )
+        open_appeal = ProviderAppeal.objects.filter(
+            provider=provider,
+            appeal_type=appeal_type,
+            status__in=[
+                ProviderAppealStatus.SUBMITTED,
+                ProviderAppealStatus.UNDER_REVIEW,
+                ProviderAppealStatus.REOPENED,
+            ],
+        ).exists()
+        if open_appeal:
+            raise serializers.ValidationError(
+                {"appeal_type": ["There is already an open appeal for this action."]}
+            )
+        if "<" in attrs.get("reason", "") or ">" in attrs.get("reason", ""):
+            raise serializers.ValidationError({"reason": ["HTML is not allowed."]})
+        return attrs
+
+
+class AdminAppealDecisionSerializer(serializers.Serializer):
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=1600)
 
 
 class ServicesDashboardStatSerializer(serializers.Serializer):

@@ -11,11 +11,17 @@ from apps.common.models import BaseModel
 from apps.services.choices import (
     PortfolioImageStatus,
     PreferredContactMethod,
+    ProviderAppealStatus,
+    ProviderAppealType,
     ProviderStatus,
+    ProviderSuspensionType,
     ProviderTradeStatus,
     ProviderType,
     QuoteRequestStatus,
     ServiceBookingStatus,
+    ServiceComplaintCategory,
+    ServiceComplaintStatus,
+    ServiceComplaintType,
     ServiceReviewFlagReason,
     ServiceReviewStatus,
     SkillLevel,
@@ -24,6 +30,10 @@ from apps.services.choices import (
 
 def portfolio_image_upload_to(instance: PortfolioImage, filename: str) -> str:
     return f"services/{instance.provider_id}/portfolio/{filename}"
+
+
+def complaint_evidence_upload_to(instance: ServiceComplaintEvidence, filename: str) -> str:
+    return f"services/complaints/{instance.complaint_id}/evidence/{filename}"
 
 
 class TradeCategory(BaseModel):
@@ -131,6 +141,19 @@ class ServiceProvider(BaseModel):
     rejection_reason = models.TextField(blank=True)
     more_info_message = models.TextField(blank=True)
     suspended_reason = models.TextField(blank=True)
+    warning_count = models.PositiveSmallIntegerField(default=0)
+    last_warning_reason = models.TextField(blank=True)
+    suspension_type = models.CharField(
+        max_length=20,
+        choices=ProviderSuspensionType.choices,
+        blank=True,
+    )
+    suspension_expires_at = models.DateTimeField(null=True, blank=True)
+    appeal_status = models.CharField(
+        max_length=20,
+        choices=ProviderAppealStatus.choices,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["business_name"]
@@ -142,6 +165,7 @@ class ServiceProvider(BaseModel):
             models.Index(fields=["lga", "status"]),
             models.Index(fields=["average_rating"]),
             models.Index(fields=["completed_jobs_count"]),
+            models.Index(fields=["suspension_type", "suspension_expires_at"]),
         ]
 
     def __str__(self) -> str:
@@ -228,17 +252,43 @@ class ServiceProvider(BaseModel):
             ]
         )
 
-    def suspend(self, *, reviewer, reason: str) -> None:
+    def warn(self, *, reviewer, reason: str) -> None:
+        self.warning_count += 1
+        self.last_warning_reason = reason
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewer
+        self.save(
+            update_fields=[
+                "warning_count",
+                "last_warning_reason",
+                "reviewed_at",
+                "reviewed_by",
+                "updated_at",
+            ]
+        )
+
+    def suspend(
+        self,
+        *,
+        reviewer,
+        reason: str,
+        suspension_type: str = ProviderSuspensionType.TEMPORARY,
+        expires_at=None,
+    ) -> None:
         self.status = ProviderStatus.SUSPENDED
         self.reviewed_at = timezone.now()
         self.reviewed_by = reviewer
         self.suspended_reason = reason
+        self.suspension_type = suspension_type
+        self.suspension_expires_at = expires_at
         self.save(
             update_fields=[
                 "status",
                 "reviewed_at",
                 "reviewed_by",
                 "suspended_reason",
+                "suspension_type",
+                "suspension_expires_at",
                 "updated_at",
             ]
         )
@@ -248,6 +298,9 @@ class ServiceProvider(BaseModel):
         self.reviewed_at = timezone.now()
         self.reviewed_by = reviewer
         self.suspended_reason = ""
+        self.suspension_type = ""
+        self.suspension_expires_at = None
+        self.appeal_status = ""
         if not self.published_at:
             self.published_at = timezone.now()
         self.save(
@@ -256,6 +309,9 @@ class ServiceProvider(BaseModel):
                 "reviewed_at",
                 "reviewed_by",
                 "suspended_reason",
+                "suspension_type",
+                "suspension_expires_at",
+                "appeal_status",
                 "published_at",
                 "updated_at",
             ]
@@ -758,3 +814,196 @@ class ServiceReviewFlag(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.reason} flag for {self.review_id}"
+
+
+class ServiceComplaint(BaseModel):
+    complainant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_complaints",
+    )
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="complaints",
+    )
+    quote_request = models.ForeignKey(
+        QuoteRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
+    review = models.ForeignKey(
+        ServiceReview,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
+    booking = models.ForeignKey(
+        ServiceBooking,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
+    complaint_type = models.CharField(max_length=20, choices=ServiceComplaintType.choices)
+    category = models.CharField(
+        max_length=40,
+        choices=ServiceComplaintCategory.choices,
+        default=ServiceComplaintCategory.OTHER,
+    )
+    subject = models.CharField(max_length=180)
+    description = models.TextField()
+    status = models.CharField(
+        max_length=24,
+        choices=ServiceComplaintStatus.choices,
+        default=ServiceComplaintStatus.OPEN,
+        db_index=True,
+    )
+    assigned_admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_service_complaints",
+    )
+    resolution_notes = models.TextField(blank=True)
+    admin_notes = models.TextField(blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    escalated_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["complainant", "created_at"]),
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["category", "status"]),
+            models.Index(fields=["assigned_admin", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.subject} against {self.provider.business_name}"
+
+    def clean(self) -> None:
+        if self.provider_id and self.complainant_id == self.provider.user_id:
+            if self.complaint_type != ServiceComplaintType.PROVIDER:
+                raise ValidationError(
+                    {"complaint_type": "Provider-owned complaints must use provider type."}
+                )
+        if self.quote_request_id and self.provider_id != self.quote_request.provider_id:
+            raise ValidationError({"quote_request": "Quote request must belong to provider."})
+        if self.review_id and self.provider_id != self.review.provider_id:
+            raise ValidationError({"review": "Review must belong to provider."})
+        if self.booking_id and self.provider_id != self.booking.provider_id:
+            raise ValidationError({"booking": "Booking must belong to provider."})
+
+    def set_status(self, *, new_status: str, actor=None, notes: str = "") -> None:
+        self.status = new_status
+        now = timezone.now()
+        update_fields = ["status", "updated_at"]
+        if notes:
+            self.resolution_notes = notes
+            update_fields.append("resolution_notes")
+        if actor and getattr(actor, "is_authenticated", False):
+            self.assigned_admin = actor
+            update_fields.append("assigned_admin")
+        if new_status == ServiceComplaintStatus.RESOLVED:
+            self.resolved_at = now
+            update_fields.append("resolved_at")
+        elif new_status == ServiceComplaintStatus.REJECTED:
+            self.rejected_at = now
+            update_fields.append("rejected_at")
+        elif new_status == ServiceComplaintStatus.ESCALATED:
+            self.escalated_at = now
+            update_fields.append("escalated_at")
+        elif new_status == ServiceComplaintStatus.CLOSED:
+            self.closed_at = now
+            update_fields.append("closed_at")
+        self.save(update_fields=update_fields)
+
+
+class ServiceComplaintEvidence(BaseModel):
+    complaint = models.ForeignKey(
+        ServiceComplaint,
+        on_delete=models.CASCADE,
+        related_name="evidence",
+    )
+    file = models.FileField(upload_to=complaint_evidence_upload_to)
+    caption = models.CharField(max_length=180, blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_complaint_evidence",
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["complaint", "created_at"]),
+            models.Index(fields=["uploaded_by", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Evidence for {self.complaint_id}"
+
+
+class ProviderAppeal(BaseModel):
+    provider = models.ForeignKey(
+        ServiceProvider,
+        on_delete=models.PROTECT,
+        related_name="appeals",
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="service_provider_appeals",
+    )
+    appeal_type = models.CharField(max_length=20, choices=ProviderAppealType.choices)
+    reason = models.TextField()
+    status = models.CharField(
+        max_length=20,
+        choices=ProviderAppealStatus.choices,
+        default=ProviderAppealStatus.SUBMITTED,
+        db_index=True,
+    )
+    admin_notes = models.TextField(blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="decided_service_provider_appeals",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+            models.Index(fields=["submitted_by", "created_at"]),
+            models.Index(fields=["appeal_type", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.appeal_type} appeal for {self.provider.business_name}"
+
+    def clean(self) -> None:
+        if self.provider_id and self.submitted_by_id != self.provider.user_id:
+            raise ValidationError({"submitted_by": "Only the provider owner may appeal."})
+
+    def decide(self, *, status_value: str, actor, notes: str = "") -> None:
+        self.status = status_value
+        self.decided_by = actor
+        self.decided_at = timezone.now()
+        if notes:
+            self.admin_notes = notes
+        self.save(
+            update_fields=["status", "decided_by", "decided_at", "admin_notes", "updated_at"]
+        )
+        self.provider.appeal_status = status_value
+        self.provider.save(update_fields=["appeal_status", "updated_at"])

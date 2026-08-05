@@ -2,10 +2,13 @@ from django.contrib import admin
 
 from apps.services.models import (
     PortfolioImage,
+    ProviderAppeal,
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
     ServiceBooking,
+    ServiceComplaint,
+    ServiceComplaintEvidence,
     ServiceProvider,
     ServiceReview,
     ServiceReviewFlag,
@@ -190,3 +193,60 @@ class ServiceReviewFlagAdmin(admin.ModelAdmin):
     search_fields = ["details", "review__title", "user__email"]
     autocomplete_fields = ["review", "user"]
     readonly_fields = ["created_at", "updated_at", "deleted_at"]
+
+
+class ServiceComplaintEvidenceInline(admin.TabularInline):
+    model = ServiceComplaintEvidence
+    extra = 0
+    autocomplete_fields = ["uploaded_by"]
+    readonly_fields = ["created_at", "updated_at", "deleted_at"]
+
+
+@admin.register(ServiceComplaint)
+class ServiceComplaintAdmin(admin.ModelAdmin):
+    inlines = [ServiceComplaintEvidenceInline]
+    list_display = [
+        "subject",
+        "provider",
+        "complainant",
+        "complaint_type",
+        "category",
+        "status",
+        "assigned_admin",
+        "created_at",
+    ]
+    list_filter = ["status", "complaint_type", "category", "created_at"]
+    search_fields = ["subject", "description", "provider__business_name", "complainant__email"]
+    autocomplete_fields = [
+        "complainant",
+        "provider",
+        "quote_request",
+        "review",
+        "booking",
+        "assigned_admin",
+    ]
+    readonly_fields = [
+        "resolved_at",
+        "rejected_at",
+        "escalated_at",
+        "closed_at",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+    ]
+
+
+@admin.register(ProviderAppeal)
+class ProviderAppealAdmin(admin.ModelAdmin):
+    list_display = [
+        "provider",
+        "appeal_type",
+        "status",
+        "submitted_by",
+        "decided_by",
+        "created_at",
+    ]
+    list_filter = ["appeal_type", "status", "created_at"]
+    search_fields = ["reason", "admin_notes", "provider__business_name", "submitted_by__email"]
+    autocomplete_fields = ["provider", "submitted_by", "decided_by"]
+    readonly_fields = ["decided_at", "created_at", "updated_at", "deleted_at"]
