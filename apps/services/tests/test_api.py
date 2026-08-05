@@ -848,3 +848,121 @@ def test_review_flagging_is_unique_and_hides_from_public_when_high_risk(
         reverse("service-provider-reviews", kwargs={"provider_slug": active_provider.slug})
     )
     assert public_response.data["count"] == 0
+
+
+@pytest.mark.django_db
+def test_customer_services_dashboard_is_scoped_to_current_user(
+    api_client,
+    active_provider,
+    other_user,
+    admin_user,
+):
+    quote = QuoteRequest.objects.create(
+        customer=other_user,
+        customer_name="Customer User",
+        provider=active_provider,
+        project_title="Fix distribution board",
+        project_description="Need an electrician for a rental unit.",
+        phone="+2348000000001",
+        email="customer@example.com",
+        state="Lagos",
+    )
+    QuoteRequest.objects.create(
+        customer=admin_user,
+        customer_name="Admin User",
+        provider=active_provider,
+        project_title="Private admin quote",
+        project_description="This should not appear for the customer.",
+        phone="+2348000000002",
+        email="admin@example.com",
+        state="Abuja",
+    )
+    booking = create_completed_service_booking(active_provider, other_user)
+
+    api_client.force_authenticate(user=other_user)
+    response = api_client.get(reverse("services-dashboard-customer"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["recent_quote_requests"][0]["id"] == str(quote.id)
+    assert response.data["eligible_reviews"][0]["id"] == str(booking.id)
+    assert response.data["recent_quote_requests"][0]["project_title"] == "Fix distribution board"
+
+
+@pytest.mark.django_db
+def test_provider_services_dashboard_returns_owned_operations(
+    api_client,
+    active_provider,
+    other_user,
+    admin_user,
+):
+    quote = QuoteRequest.objects.create(
+        customer=other_user,
+        customer_name="Customer User",
+        provider=active_provider,
+        project_title="Install sockets",
+        project_description="Need new sockets installed.",
+        phone="+2348000000001",
+        email="customer@example.com",
+        state="Lagos",
+    )
+    booking = create_completed_service_booking(active_provider, other_user)
+    review = ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=5,
+        title="Great service",
+        comment="Clean installation.",
+    )
+    api_client.force_authenticate(user=admin_user)
+    api_client.post(reverse("service-admin-reviews-publish", args=[review.id]))
+
+    api_client.force_authenticate(user=active_provider.user)
+    response = api_client.get(reverse("services-dashboard-provider"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["profile"]["id"] == str(active_provider.id)
+    assert response.data["quote_status_counts"][QuoteRequestStatus.SUBMITTED] == 1
+    assert response.data["recent_quote_requests"][0]["id"] == str(quote.id)
+    assert response.data["review_status_counts"][ServiceReviewStatus.PUBLISHED] == 1
+    assert response.data["response_reminders"][0]["id"] == str(review.id)
+
+
+@pytest.mark.django_db
+def test_admin_services_dashboard_requires_admin_and_summarizes_global_queues(
+    api_client,
+    active_provider,
+    other_user,
+    admin_user,
+):
+    quote = QuoteRequest.objects.create(
+        customer=other_user,
+        customer_name="Customer User",
+        provider=active_provider,
+        project_title="Open quote",
+        project_description="Need a service provider.",
+        phone="+2348000000001",
+        email="customer@example.com",
+        state="Lagos",
+    )
+    booking = create_completed_service_booking(active_provider, other_user)
+    ServiceReview.objects.create(
+        booking=booking,
+        customer=other_user,
+        provider=active_provider,
+        rating=4,
+        title="Pending review",
+        comment="Waiting for admin moderation.",
+    )
+
+    api_client.force_authenticate(user=other_user)
+    denied_response = api_client.get(reverse("services-dashboard-admin"))
+    assert denied_response.status_code == status.HTTP_403_FORBIDDEN
+
+    api_client.force_authenticate(user=admin_user)
+    response = api_client.get(reverse("services-dashboard-admin"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["quote_status_counts"][QuoteRequestStatus.SUBMITTED] == 1
+    assert response.data["review_status_counts"][ServiceReviewStatus.PENDING] == 1
+    assert response.data["open_quote_requests"][0]["id"] == str(quote.id)

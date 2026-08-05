@@ -747,12 +747,14 @@ class QuoteRequestStatusSerializer(serializers.Serializer):
 
 
 class ServiceBookingSummarySerializer(serializers.ModelSerializer):
+    provider = QuoteProviderSummarySerializer(read_only=True)
     service_category = TradeCategorySerializer(read_only=True)
 
     class Meta:
         model = ServiceBooking
         fields = [
             "id",
+            "provider",
             "title",
             "service_summary",
             "status",
@@ -969,6 +971,63 @@ class AdminServiceReviewSerializer(ServiceReviewSerializer):
             "flags",
         ]
         read_only_fields = fields
+
+
+class ServicesDashboardStatSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    value = serializers.CharField()
+    detail = serializers.CharField(required=False, allow_blank=True)
+    tone = serializers.CharField(required=False, allow_blank=True)
+
+
+class ServicesDashboardActivityItemSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    timestamp = serializers.DateTimeField()
+    href = serializers.CharField(required=False, allow_blank=True)
+
+
+class ServicesDashboardBreakdownItemSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    value = serializers.IntegerField()
+
+
+class CustomerServicesDashboardSerializer(serializers.Serializer):
+    stats = ServicesDashboardStatSerializer(many=True)
+    recent_quote_requests = QuoteRequestSerializer(many=True)
+    submitted_reviews = ServiceReviewSerializer(many=True)
+    eligible_reviews = ServiceBookingSummarySerializer(many=True)
+    recent_providers = PublicServiceProviderListSerializer(many=True)
+    recommended_providers = PublicServiceProviderListSerializer(many=True)
+    service_categories = TradeCategorySerializer(many=True)
+    activity = ServicesDashboardActivityItemSerializer(many=True)
+
+
+class ProviderServicesDashboardSerializer(serializers.Serializer):
+    profile = ServiceProviderOwnerSerializer(allow_null=True)
+    stats = ServicesDashboardStatSerializer(many=True)
+    quote_status_counts = serializers.DictField(child=serializers.IntegerField())
+    review_status_counts = serializers.DictField(child=serializers.IntegerField())
+    recent_quote_requests = QuoteRequestSerializer(many=True)
+    latest_reviews = ServiceReviewSerializer(many=True)
+    response_reminders = ServiceReviewSerializer(many=True)
+    activity = ServicesDashboardActivityItemSerializer(many=True)
+
+
+class AdminServicesDashboardSerializer(serializers.Serializer):
+    stats = ServicesDashboardStatSerializer(many=True)
+    provider_status_counts = serializers.DictField(child=serializers.IntegerField())
+    quote_status_counts = serializers.DictField(child=serializers.IntegerField())
+    review_status_counts = serializers.DictField(child=serializers.IntegerField())
+    pending_providers = AdminServiceProviderSerializer(many=True)
+    pending_reviews = AdminServiceReviewSerializer(many=True)
+    flagged_reviews = AdminServiceReviewSerializer(many=True)
+    open_quote_requests = QuoteRequestSerializer(many=True)
+    category_breakdown = ServicesDashboardBreakdownItemSerializer(many=True)
+    geographic_breakdown = ServicesDashboardBreakdownItemSerializer(many=True)
+    activity = ServicesDashboardActivityItemSerializer(many=True)
 
 
 def validate_provider_submission(provider: ServiceProvider) -> dict:

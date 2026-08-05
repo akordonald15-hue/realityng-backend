@@ -5,6 +5,8 @@ from apps.services.views import (
     AdminQuoteRequestViewSet,
     AdminServiceProviderViewSet,
     AdminServiceReviewViewSet,
+    AdminServicesDashboardView,
+    CustomerServicesDashboardView,
     PortfolioImageManagementViewSet,
     ProviderProfileDeactivateView,
     ProviderProfileMeView,
@@ -12,6 +14,7 @@ from apps.services.views import (
     ProviderProfileView,
     ProviderQuoteRequestViewSet,
     ProviderReviewViewSet,
+    ProviderServicesDashboardView,
     ProviderTradeManagementViewSet,
     PublicProviderReviewViewSet,
     PublicQuoteRequestCreateViewSet,
@@ -96,6 +99,21 @@ urlpatterns = [
         "services/provider-profile/deactivate/",
         ProviderProfileDeactivateView.as_view(),
         name="service-provider-profile-deactivate",
+    ),
+    path(
+        "services/dashboard/customer/",
+        CustomerServicesDashboardView.as_view(),
+        name="services-dashboard-customer",
+    ),
+    path(
+        "services/dashboard/provider/",
+        ProviderServicesDashboardView.as_view(),
+        name="services-dashboard-provider",
+    ),
+    path(
+        "services/dashboard/admin/",
+        AdminServicesDashboardView.as_view(),
+        name="services-dashboard-admin",
     ),
     path("", include(router.urls)),
 ]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Avg, Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
@@ -19,6 +19,8 @@ from apps.accounts.services import user_is_admin
 from apps.services.choices import (
     ProviderStatus,
     ProviderTradeStatus,
+    QuoteRequestStatus,
+    ServiceBookingStatus,
     ServiceReviewFlagReason,
     ServiceReviewStatus,
 )
@@ -28,6 +30,7 @@ from apps.services.models import (
     ProviderTrade,
     QuoteRequest,
     ServiceArea,
+    ServiceBooking,
     ServiceProvider,
     ServiceReview,
     ServiceReviewFlag,
@@ -44,11 +47,14 @@ from apps.services.serializers import (
     AdminReviewDecisionSerializer,
     AdminServiceProviderSerializer,
     AdminServiceReviewSerializer,
+    AdminServicesDashboardSerializer,
+    CustomerServicesDashboardSerializer,
     PortfolioImageMetadataSerializer,
     PortfolioImagePublicSerializer,
     PortfolioImageSerializer,
     PortfolioReorderSerializer,
     ProviderReviewResponseSerializer,
+    ProviderServicesDashboardSerializer,
     ProviderTradeWriteSerializer,
     PublicServiceProviderDetailSerializer,
     PublicServiceProviderListSerializer,
@@ -295,6 +301,39 @@ def review_queryset():
     ).prefetch_related("flags")
 
 
+def count_by_status(queryset, choices) -> dict[str, int]:
+    counts = dict.fromkeys([choice.value for choice in choices], 0)
+    for item in queryset.values("status").annotate(total=Count("id")):
+        counts[item["status"]] = item["total"]
+    return counts
+
+
+def unique_in_order(items) -> list:
+    seen = set()
+    ordered = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def activity_item(*, item_id, title, description="", status_label="", timestamp, href="") -> dict:
+    return {
+        "id": str(item_id),
+        "title": title,
+        "description": description,
+        "status": status_label,
+        "timestamp": timestamp,
+        "href": href,
+    }
+
+
+def newest_activity(*groups, limit=8) -> list[dict]:
+    activity = [item for group in groups for item in group]
+    return sorted(activity, key=lambda item: item["timestamp"], reverse=True)[:limit]
+
+
 def filter_reviews(queryset, request):
     status_value = request.query_params.get("status")
     provider = request.query_params.get("provider")
@@ -328,6 +367,392 @@ def client_ip(request):
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
+
+
+class CustomerServicesDashboardView(APIView):
+    serializer_class = CustomerServicesDashboardSerializer
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: CustomerServicesDashboardSerializer})
+    def get(self, request):
+        user = request.user
+        quote_requests = quote_request_queryset().filter(customer=user).order_by("-created_at")
+        submitted_reviews = review_queryset().filter(customer=user).order_by("-created_at")
+        eligible_reviews = (
+            ServiceBooking.objects.filter(
+                customer=user,
+                status=ServiceBookingStatus.COMPLETED,
+                completed_at__isnull=False,
+                review__isnull=True,
+            )
+            .select_related("provider", "service_category")
+            .order_by("-completed_at")
+        )
+        provider_ids = unique_in_order(quote_requests.values_list("provider_id", flat=True)[:12])
+        recent_providers = active_public_provider_queryset().filter(id__in=provider_ids)
+        recommended_providers = active_public_provider_queryset().order_by(
+            "-average_rating",
+            "-published_review_count",
+            "business_name",
+        )[:4]
+        categories = (
+            TradeCategory.objects.filter(is_active=True, parent__isnull=True)
+            .prefetch_related(
+                Prefetch(
+                    "children",
+                    queryset=TradeCategory.objects.filter(is_active=True).order_by(
+                        "display_order", "name"
+                    ),
+                    to_attr="prefetched_children",
+                )
+            )
+            .order_by("display_order", "name")[:8]
+        )
+
+        activity = newest_activity(
+            [
+                activity_item(
+                    item_id=f"quote-{item.id}",
+                    title=f"Quote requested: {item.project_title}",
+                    description=item.provider.business_name,
+                    status_label=item.status,
+                    timestamp=item.created_at,
+                    href="/dashboard/services",
+                )
+                for item in quote_requests[:5]
+            ],
+            [
+                activity_item(
+                    item_id=f"review-{item.id}",
+                    title=f"Review submitted: {item.title}",
+                    description=item.provider.business_name,
+                    status_label=item.status,
+                    timestamp=item.created_at,
+                    href="/dashboard/services/reviews",
+                )
+                for item in submitted_reviews[:5]
+            ],
+            [
+                activity_item(
+                    item_id=f"eligible-review-{item.id}",
+                    title=f"Review available: {item.title}",
+                    description=item.provider.business_name,
+                    status_label="eligible",
+                    timestamp=item.completed_at or item.updated_at,
+                    href=f"/dashboard/services/bookings/{item.id}/review",
+                )
+                for item in eligible_reviews[:5]
+            ],
+        )
+
+        data = {
+            "stats": [
+                {
+                    "label": "Quote requests",
+                    "value": str(quote_requests.count()),
+                    "detail": "Requests sent to service providers",
+                },
+                {
+                    "label": "Pending responses",
+                    "value": str(
+                        quote_requests.filter(
+                            status__in=[QuoteRequestStatus.SUBMITTED, QuoteRequestStatus.VIEWED]
+                        ).count()
+                    ),
+                    "detail": "Quotes not yet marked responded or closed",
+                },
+                {
+                    "label": "Submitted reviews",
+                    "value": str(submitted_reviews.count()),
+                    "detail": "Reviews linked to completed engagements",
+                },
+                {
+                    "label": "Reviews waiting",
+                    "value": str(eligible_reviews.count()),
+                    "detail": "Completed services still eligible for review",
+                },
+            ],
+            "recent_quote_requests": quote_requests[:5],
+            "submitted_reviews": submitted_reviews[:5],
+            "eligible_reviews": eligible_reviews[:5],
+            "recent_providers": recent_providers[:5],
+            "recommended_providers": recommended_providers,
+            "service_categories": categories,
+            "activity": activity,
+        }
+        serializer = self.serializer_class(data, context={"request": request})
+        return Response(serializer.data)
+
+
+class ProviderServicesDashboardView(APIView):
+    serializer_class = ProviderServicesDashboardSerializer
+    permission_classes = [IsAuthenticated, IsEligibleServiceProvider]
+
+    @extend_schema(responses={200: ProviderServicesDashboardSerializer})
+    def get(self, request):
+        provider = provider_queryset().filter(user=request.user).first()
+        if not provider:
+            data = {
+                "profile": None,
+                "stats": [
+                    {
+                        "label": "Profile completion",
+                        "value": "0%",
+                        "detail": "Create a provider profile to start tracking service operations",
+                    }
+                ],
+                "quote_status_counts": count_by_status(
+                    QuoteRequest.objects.none(),
+                    QuoteRequestStatus,
+                ),
+                "review_status_counts": count_by_status(
+                    ServiceReview.objects.none(),
+                    ServiceReviewStatus,
+                ),
+                "recent_quote_requests": [],
+                "latest_reviews": [],
+                "response_reminders": [],
+                "activity": [],
+            }
+            return Response(self.serializer_class(data, context={"request": request}).data)
+
+        quotes = quote_request_queryset().filter(provider=provider)
+        reviews = review_queryset().filter(provider=provider)
+        bookings = ServiceBooking.objects.filter(provider=provider)
+        completion = validate_provider_submission(provider)
+        missing = completion.get("missing", [])
+        total_completion_items = 6
+        completion_percentage = round(
+            ((total_completion_items - len(missing)) / total_completion_items) * 100
+        )
+        active_trades = provider.trades.filter(status=ProviderTradeStatus.ACTIVE).select_related(
+            "category"
+        )
+        active_service_areas = provider.service_areas.all()
+        portfolio_count = provider.portfolio_images.count()
+        response_reminders = reviews.filter(
+            status=ServiceReviewStatus.PUBLISHED,
+            provider_response="",
+        ).order_by("-published_at", "-created_at")
+
+        activity = newest_activity(
+            [
+                activity_item(
+                    item_id=f"quote-{item.id}",
+                    title=f"New quote: {item.project_title}",
+                    description=item.customer_name,
+                    status_label=item.status,
+                    timestamp=item.created_at,
+                    href="/dashboard/artisan/quote-requests",
+                )
+                for item in quotes.order_by("-created_at")[:5]
+            ],
+            [
+                activity_item(
+                    item_id=f"review-{item.id}",
+                    title=f"Review: {item.title}",
+                    description=f"{item.rating}/5 from a verified customer",
+                    status_label=item.status,
+                    timestamp=item.created_at,
+                    href="/dashboard/artisan/reviews",
+                )
+                for item in reviews.order_by("-created_at")[:5]
+            ],
+        )
+
+        data = {
+            "profile": provider,
+            "stats": [
+                {
+                    "label": "Profile completion",
+                    "value": f"{completion_percentage}%",
+                    "detail": completion.get("message", ""),
+                },
+                {
+                    "label": "Average rating",
+                    "value": str(provider.average_rating),
+                    "detail": f"{provider.published_review_count} published reviews",
+                },
+                {
+                    "label": "Quote requests",
+                    "value": str(quotes.count()),
+                    "detail": "Total service enquiries received",
+                },
+                {
+                    "label": "Completed jobs",
+                    "value": str(
+                        bookings.filter(status=ServiceBookingStatus.COMPLETED).count()
+                    ),
+                    "detail": "Completed service engagements",
+                },
+                {
+                    "label": "Portfolio",
+                    "value": str(portfolio_count),
+                    "detail": "Public work samples",
+                },
+                {
+                    "label": "Coverage",
+                    "value": str(active_service_areas.count()),
+                    "detail": "Service areas listed",
+                },
+                {
+                    "label": "Primary trade",
+                    "value": (
+                        active_trades.filter(is_primary=True).first().category.name
+                        if active_trades.filter(is_primary=True).exists()
+                        else "Not set"
+                    ),
+                    "detail": f"{active_trades.count()} active trades",
+                },
+                {
+                    "label": "Response reminders",
+                    "value": str(response_reminders.count()),
+                    "detail": "Published reviews awaiting a provider response",
+                },
+            ],
+            "quote_status_counts": count_by_status(quotes, QuoteRequestStatus),
+            "review_status_counts": count_by_status(reviews, ServiceReviewStatus),
+            "recent_quote_requests": quotes.order_by("-created_at")[:5],
+            "latest_reviews": reviews.order_by("-created_at")[:5],
+            "response_reminders": response_reminders[:5],
+            "activity": activity,
+        }
+        return Response(self.serializer_class(data, context={"request": request}).data)
+
+
+class AdminServicesDashboardView(APIView):
+    serializer_class = AdminServicesDashboardSerializer
+    permission_classes = [IsAuthenticated, IsServicesAdmin]
+
+    @extend_schema(responses={200: AdminServicesDashboardSerializer})
+    def get(self, request):
+        providers = provider_queryset()
+        quotes = quote_request_queryset()
+        reviews = review_queryset()
+        pending_providers = providers.filter(
+            status__in=[ProviderStatus.PENDING_REVIEW, ProviderStatus.NEEDS_MORE_INFORMATION]
+        ).order_by("-submitted_at", "-created_at")
+        pending_reviews = reviews.filter(status=ServiceReviewStatus.PENDING).order_by("-created_at")
+        flagged_reviews = reviews.filter(status=ServiceReviewStatus.FLAGGED).order_by("-updated_at")
+        open_quotes = quotes.exclude(
+            status__in=[QuoteRequestStatus.CLOSED, QuoteRequestStatus.CANCELLED]
+        ).order_by("-created_at")
+
+        category_breakdown = [
+            {"label": item["name"], "value": item["provider_count"]}
+            for item in TradeCategory.objects.filter(is_active=True)
+            .annotate(
+                provider_count=Count(
+                    "provider_trades__provider",
+                    filter=Q(
+                        provider_trades__status=ProviderTradeStatus.ACTIVE,
+                        provider_trades__provider__status=ProviderStatus.ACTIVE,
+                    ),
+                    distinct=True,
+                )
+            )
+            .filter(provider_count__gt=0)
+            .order_by("-provider_count", "name")[:8]
+            .values("name", "provider_count")
+        ]
+        geographic_breakdown = [
+            {
+                "label": ", ".join(part for part in [item["city"], item["state"]] if part),
+                "value": item["provider_count"],
+            }
+            for item in ServiceArea.objects.values("state", "city")
+            .annotate(provider_count=Count("provider", distinct=True))
+            .order_by("-provider_count", "state", "city")[:8]
+        ]
+
+        activity = newest_activity(
+            [
+                activity_item(
+                    item_id=f"provider-{item.id}",
+                    title=f"Provider profile: {item.business_name}",
+                    description=item.public_display_location,
+                    status_label=item.status,
+                    timestamp=item.submitted_at or item.created_at,
+                    href=f"/admin/services/providers/{item.id}",
+                )
+                for item in pending_providers[:5]
+            ],
+            [
+                activity_item(
+                    item_id=f"review-{item.id}",
+                    title=f"Review moderation: {item.title}",
+                    description=item.provider.business_name,
+                    status_label=item.status,
+                    timestamp=item.updated_at,
+                    href=f"/admin/services/reviews/{item.id}",
+                )
+                for item in reviews.order_by("-updated_at")[:5]
+            ],
+            [
+                activity_item(
+                    item_id=f"quote-{item.id}",
+                    title=f"Quote request: {item.project_title}",
+                    description=item.provider.business_name,
+                    status_label=item.status,
+                    timestamp=item.updated_at,
+                    href="/admin/services/quote-requests",
+                )
+                for item in quotes.order_by("-updated_at")[:5]
+            ],
+        )
+        average_rating = (
+            providers.filter(
+                status=ProviderStatus.ACTIVE,
+                published_review_count__gt=0,
+            ).aggregate(value=Avg("average_rating"))["value"]
+            or 0
+        )
+
+        data = {
+            "stats": [
+                {
+                    "label": "Pending provider approvals",
+                    "value": str(pending_providers.count()),
+                    "detail": "Profiles waiting for admin action",
+                },
+                {
+                    "label": "Active providers",
+                    "value": str(providers.filter(status=ProviderStatus.ACTIVE).count()),
+                    "detail": "Visible in public services marketplace",
+                },
+                {
+                    "label": "Open quote requests",
+                    "value": str(open_quotes.count()),
+                    "detail": "Submitted, viewed, or responded enquiries",
+                },
+                {
+                    "label": "Pending reviews",
+                    "value": str(pending_reviews.count()),
+                    "detail": "Customer reviews waiting for moderation",
+                },
+                {
+                    "label": "Flagged reviews",
+                    "value": str(flagged_reviews.count()),
+                    "detail": "Reviews needing trust review",
+                },
+                {
+                    "label": "Average rating",
+                    "value": f"{average_rating:.2f}",
+                    "detail": "Average across active providers with published reviews",
+                },
+            ],
+            "provider_status_counts": count_by_status(providers, ProviderStatus),
+            "quote_status_counts": count_by_status(quotes, QuoteRequestStatus),
+            "review_status_counts": count_by_status(reviews, ServiceReviewStatus),
+            "pending_providers": pending_providers[:5],
+            "pending_reviews": pending_reviews[:5],
+            "flagged_reviews": flagged_reviews[:5],
+            "open_quote_requests": open_quotes[:5],
+            "category_breakdown": category_breakdown,
+            "geographic_breakdown": geographic_breakdown,
+            "activity": activity,
+        }
+        return Response(self.serializer_class(data, context={"request": request}).data)
 
 
 class ProviderTradeManagementViewSet(
