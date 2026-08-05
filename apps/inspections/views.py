@@ -246,18 +246,6 @@ class InspectionRequestViewSet(
             InspectionTimelineEventSerializer(events, many=True, context={"request": request}).data
         )
 
-    @action(detail=True, methods=["get"])
-    def report(self, request, pk=None):
-        inspection = self.get_object()
-        report = get_object_or_404(
-            InspectionReport.objects.prefetch_related("evidence"), inspection_request=inspection
-        )
-        if report.status != InspectionReportStatus.APPROVED and not (
-            user_is_admin(request.user) or report.inspector_id == request.user.id
-        ):
-            return Response(status=status.HTTP_403_FORBIDDEN)
-        return Response(InspectionReportSerializer(report, context={"request": request}).data)
-
 
 class AdminInspectionRequestViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AdminInspectionRequestSerializer
@@ -733,6 +721,29 @@ class InspectionReportViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
             InspectionReportSerializer(report, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    def by_request(self, request, request_id=None):
+        inspection = get_object_or_404(
+            InspectionRequest.objects.select_related("property", "requester", "assigned_inspector"),
+            id=request_id,
+        )
+        if not user_can_view_inspection(request.user, inspection):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        report = get_object_or_404(
+            InspectionReport.objects.select_related(
+                "inspection_request",
+                "inspection_request__property",
+                "inspection_request__requester",
+                "inspector",
+                "reviewed_by",
+            ).prefetch_related("evidence"),
+            inspection_request=inspection,
+        )
+        if report.status != InspectionReportStatus.APPROVED and not (
+            user_is_admin(request.user) or report.inspector_id == request.user.id
+        ):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        return Response(InspectionReportSerializer(report, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):

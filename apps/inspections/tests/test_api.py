@@ -202,3 +202,37 @@ def test_inspector_report_evidence_signed_url_is_authorized(
     assert evidence_response.status_code == 201
     assert signed.status_code == 200
     assert signed.data["url"]
+
+
+def test_requester_can_fetch_approved_report_by_inspection_request(
+    api_client,
+    buyer,
+    admin_user,
+    inspector_user,
+    inspection_payload,
+):
+    api_client.force_authenticate(buyer)
+    created = api_client.post(
+        reverse("inspection-requests-list"), inspection_payload, format="json"
+    )
+    inspection_id = created.data["id"]
+    api_client.force_authenticate(admin_user)
+    api_client.post(
+        reverse("inspection-admin-requests-assign", args=[inspection_id]),
+        {"inspector_id": str(inspector_user.id)},
+        format="json",
+    )
+    api_client.force_authenticate(inspector_user)
+    report_response = api_client.post(
+        reverse("inspection-request-report-create", args=[inspection_id]),
+        {"summary": "Structurally fair.", "overall_condition": "fair", "risk_level": "moderate"},
+        format="multipart",
+    )
+    report = InspectionReport.objects.get(id=report_response.data["id"])
+    report.approve(reviewer=admin_user)
+
+    api_client.force_authenticate(buyer)
+    response = api_client.get(reverse("inspection-request-report-create", args=[inspection_id]))
+
+    assert response.status_code == 200
+    assert response.data["id"] == str(report.id)

@@ -59,7 +59,7 @@ urlpatterns = [
     ),
     path(
         "inspections/requests/<uuid:request_id>/report/",
-        InspectionReportViewSet.as_view({"post": "create"}),
+        InspectionReportViewSet.as_view({"post": "create", "get": "by_request"}),
         name="inspection-request-report-create",
     ),
     path(
