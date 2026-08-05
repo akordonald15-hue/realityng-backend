@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle, UserRateThrottle
@@ -665,7 +665,7 @@ class AdminWalkthroughViewSet(viewsets.ReadOnlyModelViewSet):
 class InspectionReportViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
     serializer_class = InspectionReportSerializer
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     throttle_scope_by_action = {
         "create": "inspection_report_submit",
         "submit": "inspection_report_submit",

@@ -236,3 +236,38 @@ def test_requester_can_fetch_approved_report_by_inspection_request(
 
     assert response.status_code == 200
     assert response.data["id"] == str(report.id)
+
+
+def test_inspector_can_create_report_with_json_payload(
+    api_client,
+    buyer,
+    admin_user,
+    inspector_user,
+    inspection_payload,
+):
+    api_client.force_authenticate(buyer)
+    created = api_client.post(
+        reverse("inspection-requests-list"), inspection_payload, format="json"
+    )
+    inspection_id = created.data["id"]
+    api_client.force_authenticate(admin_user)
+    api_client.post(
+        reverse("inspection-admin-requests-assign", args=[inspection_id]),
+        {"inspector_id": str(inspector_user.id)},
+        format="json",
+    )
+
+    api_client.force_authenticate(inspector_user)
+    response = api_client.post(
+        reverse("inspection-request-report-create", args=[inspection_id]),
+        {
+            "summary": "The property is suitable for a standard walkthrough.",
+            "overall_condition": "good",
+            "recommendation": "Proceed with normal due diligence.",
+            "risk_level": "low",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["summary"] == "The property is suitable for a standard walkthrough."
