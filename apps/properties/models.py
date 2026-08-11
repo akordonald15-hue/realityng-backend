@@ -3,7 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.common.models import BaseModel, UUIDPrimaryKeyMixin
@@ -14,6 +16,9 @@ from apps.properties.choices import (
     InquiryType,
     ListingType,
     LocationPrecision,
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
     PropertyStatus,
     PropertyType,
     RentalApplicationStatus,
@@ -183,14 +188,100 @@ class PropertyImage(UUIDPrimaryKeyMixin):
     def save(self, *args, **kwargs) -> None:
         with transaction.atomic():
             if self.is_cover:
-                PropertyImage.objects.filter(property_id=self.property_id).exclude(pk=self.pk).update(
-                    is_cover=False
-                )
+                PropertyImage.objects.filter(property_id=self.property_id).exclude(
+                    pk=self.pk
+                ).update(is_cover=False)
             super().save(*args, **kwargs)
 
     def set_as_cover(self) -> None:
         self.is_cover = True
         self.save(update_fields=["is_cover"])
+
+
+class PropertyAssignment(BaseModel):
+    property = models.ForeignKey(
+        Property,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="property_assignments",
+    )
+    relationship_type = models.CharField(
+        max_length=40,
+        choices=PropertyAssignmentType.choices,
+        default=PropertyAssignmentType.AUTHORIZED_REPRESENTATIVE,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=PropertyAssignmentStatus.choices,
+        default=PropertyAssignmentStatus.PENDING,
+        db_index=True,
+    )
+    capabilities = models.JSONField(default=list, blank=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_property_assignments",
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["property", "status"]),
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["relationship_type", "status"]),
+            models.Index(fields=["expires_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["property", "user", "relationship_type"],
+                condition=models.Q(deleted_at__isnull=True),
+                name="unique_live_property_assignment_type_per_user",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} assigned to {self.property_id} as {self.relationship_type}"
+
+    def is_currently_active(self) -> bool:
+        if self.status != PropertyAssignmentStatus.ACTIVE:
+            return False
+        return not (self.expires_at and self.expires_at <= timezone.now())
+
+    def has_capability(self, capability: str) -> bool:
+        return self.is_currently_active() and capability in set(self.capabilities or [])
+
+    def activate(self) -> None:
+        self.status = PropertyAssignmentStatus.ACTIVE
+        self.accepted_at = timezone.now()
+        self.save(update_fields=["status", "accepted_at", "updated_at"])
+
+    def revoke(self) -> None:
+        self.status = PropertyAssignmentStatus.REVOKED
+        self.revoked_at = timezone.now()
+        self.save(update_fields=["status", "revoked_at", "updated_at"])
+
+    def suspend(self) -> None:
+        self.status = PropertyAssignmentStatus.SUSPENDED
+        self.save(update_fields=["status", "updated_at"])
+
+    def clean(self) -> None:
+        allowed_capabilities = {choice.value for choice in PropertyAssignmentCapability}
+        invalid = sorted(set(self.capabilities or []) - allowed_capabilities)
+        if invalid:
+            raise ValidationError(
+                {"capabilities": f"Unsupported capabilities: {', '.join(invalid)}"}
+            )
 
 
 class Favorite(UUIDPrimaryKeyMixin):

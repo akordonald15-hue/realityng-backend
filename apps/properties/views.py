@@ -39,6 +39,7 @@ from apps.properties.serializers import (
     InquiryPropertySummarySerializer,
     InquirySerializer,
     InquiryStatusUpdateSerializer,
+    PropertyAssignmentSerializer,
     PropertyImageMetadataSerializer,
     PropertyImageSerializer,
     PropertyReviewDecisionSerializer,
@@ -52,7 +53,12 @@ from apps.properties.serializers import (
     ViewingNotesSerializer,
     ViewingSerializer,
 )
-from apps.properties.services import emit_application_event, emit_inquiry_event, emit_viewing_event
+from apps.properties.services import (
+    emit_application_event,
+    emit_inquiry_event,
+    emit_property_assignment_event,
+    emit_viewing_event,
+)
 
 
 class ActionScopedThrottleMixin:
@@ -204,6 +210,76 @@ class PropertyViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
 
     def _get_property_image(self, prop: Property, image_id: str | None) -> PropertyImage:
         return get_object_or_404(prop.images.all(), id=image_id)
+
+    @extend_schema(
+        request=PropertyAssignmentSerializer,
+        responses={200: PropertyAssignmentSerializer(many=True), 201: PropertyAssignmentSerializer},
+    )
+    @action(detail=True, methods=["get", "post"], url_path="assignments")
+    def assignments(self, request, slug=None):
+        prop = self.get_object()
+        if not (user_is_admin(request.user) or prop.owner_id == request.user.id):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        if request.method == "GET":
+            queryset = prop.assignments.select_related("user", "assigned_by")
+            return Response(
+                PropertyAssignmentSerializer(queryset, many=True, context={"request": request}).data
+            )
+        serializer = PropertyAssignmentSerializer(
+            data=request.data,
+            context={"request": request, "property": prop},
+        )
+        serializer.is_valid(raise_exception=True)
+        assignment = serializer.save(property=prop, assigned_by=request.user)
+        emit_property_assignment_event(
+            actor=request.user,
+            assignment=assignment,
+            event_name="property_assignment.created",
+        )
+        return Response(
+            PropertyAssignmentSerializer(assignment, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        request=PropertyAssignmentSerializer,
+        parameters=[OpenApiParameter("assignment_id", OpenApiTypes.UUID, OpenApiParameter.PATH)],
+        responses={200: PropertyAssignmentSerializer, 204: None},
+    )
+    @action(
+        detail=True,
+        methods=["patch", "delete"],
+        url_path=r"assignments/(?P<assignment_id>[^/.]+)",
+    )
+    def assignment_detail(self, request, slug=None, assignment_id=None):
+        prop = self.get_object()
+        if not (user_is_admin(request.user) or prop.owner_id == request.user.id):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        assignment = get_object_or_404(
+            prop.assignments.select_related("user", "assigned_by"), id=assignment_id
+        )
+        if request.method == "DELETE":
+            assignment.revoke()
+            emit_property_assignment_event(
+                actor=request.user,
+                assignment=assignment,
+                event_name="property_assignment.revoked",
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = PropertyAssignmentSerializer(
+            assignment,
+            data=request.data,
+            partial=True,
+            context={"request": request, "property": prop},
+        )
+        serializer.is_valid(raise_exception=True)
+        assignment = serializer.save()
+        emit_property_assignment_event(
+            actor=request.user,
+            assignment=assignment,
+            event_name="property_assignment.updated",
+        )
+        return Response(serializer.data)
 
     @extend_schema(
         request=PropertyReviewDecisionSerializer,
@@ -434,9 +510,7 @@ class InquiryViewSet(
         inquiry.transition_to(next_status)
 
         event_name = (
-            "inquiry.closed"
-            if next_status == InquiryStatus.CLOSED
-            else "inquiry.status_changed"
+            "inquiry.closed" if next_status == InquiryStatus.CLOSED else "inquiry.status_changed"
         )
         emit_inquiry_event(
             actor=request.user,

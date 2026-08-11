@@ -71,6 +71,7 @@ LOCAL_APPS = [
     "apps.assistant",
     "apps.services",
     "apps.inspections",
+    "apps.construction",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -174,6 +175,18 @@ REST_FRAMEWORK = {
         ),
         "inspection_signed_url": env(
             "DRF_THROTTLE_INSPECTION_SIGNED_URL_RATE",
+            default="120/hour",
+        ),
+        "construction_project_create": env(
+            "DRF_THROTTLE_CONSTRUCTION_PROJECT_CREATE_RATE",
+            default="20/hour",
+        ),
+        "construction_evidence_upload": env(
+            "DRF_THROTTLE_CONSTRUCTION_EVIDENCE_UPLOAD_RATE",
+            default="40/hour",
+        ),
+        "construction_signed_url": env(
+            "DRF_THROTTLE_CONSTRUCTION_SIGNED_URL_RATE",
             default="120/hour",
         ),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
@@ -341,6 +354,34 @@ INSPECTION_REPORT_ALLOWED_MIME_TYPES = env.list(
 INSPECTION_REPORT_ALLOWED_EXTENSIONS = env.list(
     "INSPECTION_REPORT_ALLOWED_EXTENSIONS",
     default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
+
+CONSTRUCTION_EVIDENCE_BUCKET = env(
+    "CONSTRUCTION_EVIDENCE_BUCKET",
+    default="realityng-construction-evidence",
+)
+CONSTRUCTION_SIGNED_URL_EXPIRY_SECONDS = env.int(
+    "CONSTRUCTION_SIGNED_URL_EXPIRY_SECONDS",
+    default=300,
+)
+CONSTRUCTION_MAX_IMAGE_SIZE_MB = env.int("CONSTRUCTION_MAX_IMAGE_SIZE_MB", default=25)
+CONSTRUCTION_MAX_VIDEO_SIZE_MB = env.int("CONSTRUCTION_MAX_VIDEO_SIZE_MB", default=100)
+CONSTRUCTION_MAX_DOCUMENT_SIZE_MB = env.int("CONSTRUCTION_MAX_DOCUMENT_SIZE_MB", default=25)
+CONSTRUCTION_ALLOWED_IMAGE_TYPES = env.list(
+    "CONSTRUCTION_ALLOWED_IMAGE_TYPES",
+    default=["image/jpeg", "image/png", "image/webp"],
+)
+CONSTRUCTION_ALLOWED_VIDEO_TYPES = env.list(
+    "CONSTRUCTION_ALLOWED_VIDEO_TYPES",
+    default=["video/mp4", "video/webm"],
+)
+CONSTRUCTION_ALLOWED_DOCUMENT_TYPES = env.list(
+    "CONSTRUCTION_ALLOWED_DOCUMENT_TYPES",
+    default=["application/pdf"],
+)
+CONSTRUCTION_ALLOWED_EXTENSIONS = env.list(
+    "CONSTRUCTION_ALLOWED_EXTENSIONS",
+    default=[".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm", ".pdf"],
 )
 
 TEMPLATES = [

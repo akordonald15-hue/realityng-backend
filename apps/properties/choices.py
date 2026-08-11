@@ -81,3 +81,29 @@ class RentalApplicationStatus(models.TextChoices):
     APPROVED = "approved", "Approved"
     REJECTED = "rejected", "Rejected"
     WITHDRAWN = "withdrawn", "Withdrawn"
+
+
+class PropertyAssignmentType(models.TextChoices):
+    AGENT = "agent", "Agent"
+    PROPERTY_MANAGER = "property_manager", "Property Manager"
+    CARETAKER = "caretaker", "Caretaker"
+    PROJECT_MANAGER = "project_manager", "Project Manager"
+    AUTHORIZED_REPRESENTATIVE = "authorized_representative", "Authorized Representative"
+
+
+class PropertyAssignmentStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACTIVE = "active", "Active"
+    SUSPENDED = "suspended", "Suspended"
+    REVOKED = "revoked", "Revoked"
+    EXPIRED = "expired", "Expired"
+    DECLINED = "declined", "Declined"
+
+
+class PropertyAssignmentCapability(models.TextChoices):
+    MANAGE_LISTING = "manage_listing", "Manage Listing"
+    MANAGE_WALKTHROUGHS = "manage_walkthroughs", "Manage Walkthroughs"
+    MANAGE_VIEWINGS = "manage_viewings", "Manage Viewings"
+    MANAGE_INSPECTIONS = "manage_inspections", "Manage Inspections"
+    MANAGE_CONSTRUCTION = "manage_construction", "Manage Construction"
+    VIEW_PRIVATE_PROJECT_DATA = "view_private_project_data", "View Private Project Data"

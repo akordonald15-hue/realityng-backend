@@ -15,6 +15,8 @@ from apps.properties.choices import (
     InquiryType,
     ListingType,
     LocationPrecision,
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
     PropertyStatus,
     PropertyType,
     RentalApplicationStatus,
@@ -24,6 +26,7 @@ from apps.properties.models import (
     Favorite,
     Inquiry,
     Property,
+    PropertyAssignment,
     PropertyImage,
     RentalApplication,
     Viewing,
@@ -160,6 +163,62 @@ class PropertyImageMetadataSerializer(serializers.ModelSerializer):
             instance.is_cover = validated_data["is_cover"]
         instance.save()
         return instance
+
+
+class PropertyAssignmentSerializer(serializers.ModelSerializer):
+    property = serializers.UUIDField(source="property_id", read_only=True)
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    assigned_by_email = serializers.EmailField(source="assigned_by.email", read_only=True)
+    capabilities = serializers.ListField(
+        child=serializers.ChoiceField(choices=PropertyAssignmentCapability.choices),
+        allow_empty=False,
+    )
+
+    class Meta:
+        model = PropertyAssignment
+        fields = [
+            "id",
+            "property",
+            "user",
+            "user_email",
+            "relationship_type",
+            "status",
+            "capabilities",
+            "assigned_by",
+            "assigned_by_email",
+            "assigned_at",
+            "accepted_at",
+            "revoked_at",
+            "expires_at",
+            "notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "property",
+            "assigned_by",
+            "assigned_by_email",
+            "assigned_at",
+            "accepted_at",
+            "revoked_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_status(self, value: str) -> str:
+        if value not in [PropertyAssignmentStatus.PENDING, PropertyAssignmentStatus.ACTIVE]:
+            raise serializers.ValidationError(
+                "Assignments can only be created as pending or active."
+            )
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        prop = self.context["property"]
+        user = attrs.get("user") or getattr(self.instance, "user", None)
+        if user and user.id == prop.owner_id:
+            raise serializers.ValidationError("Property owners do not need explicit assignments.")
+        return attrs
 
 
 class PropertySerializer(serializers.ModelSerializer):
@@ -840,8 +899,10 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
     def get_owner_notes(self, obj: RentalApplication) -> str:
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        if user and user.is_authenticated and (
-            user.id == obj.property_owner_id or user_is_admin(user)
+        if (
+            user
+            and user.is_authenticated
+            and (user.id == obj.property_owner_id or user_is_admin(user))
         ):
             return obj.owner_notes
         return ""

@@ -4,6 +4,7 @@ from apps.properties.models import (
     Favorite,
     Inquiry,
     Property,
+    PropertyAssignment,
     PropertyImage,
     RentalApplication,
     Viewing,
@@ -43,6 +44,14 @@ class PropertyImageAdmin(admin.ModelAdmin):
     list_filter = ["is_cover", "created_at"]
     search_fields = ["property__title", "caption"]
     readonly_fields = ["created_at"]
+
+
+@admin.register(PropertyAssignment)
+class PropertyAssignmentAdmin(admin.ModelAdmin):
+    list_display = ["property", "user", "relationship_type", "status", "assigned_by", "expires_at"]
+    list_filter = ["relationship_type", "status", "expires_at", "created_at"]
+    search_fields = ["property__title", "user__email", "assigned_by__email", "notes"]
+    readonly_fields = ["created_at", "updated_at", "assigned_at", "accepted_at", "revoked_at"]
 
 
 @admin.register(Favorite)

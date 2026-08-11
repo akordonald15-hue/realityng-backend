@@ -5,13 +5,20 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from PIL import Image
 
-from apps.accounts.models import AuditLog
+from apps.accounts.choices import RoleName, UserRoleStatus
+from apps.accounts.models import AuditLog, Role, UserRole
 from apps.inspections.choices import (
     InspectionReportStatus,
     InspectionRequestStatus,
     WalkthroughStatus,
 )
 from apps.inspections.models import InspectionAssignment, InspectionReport, PropertyWalkthrough
+from apps.properties.choices import (
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+)
+from apps.properties.models import PropertyAssignment
 
 pytestmark = pytest.mark.django_db
 
@@ -102,6 +109,62 @@ def test_non_owner_cannot_upload_walkthrough(api_client, buyer, approved_propert
         reverse("inspection-property-walkthrough-create", args=[approved_property.id]),
         {
             "title": "Unauthorized video",
+            "video_file": mp4_file(),
+        },
+        format="multipart",
+    )
+
+    assert response.status_code == 400
+
+
+def test_explicitly_assigned_agent_can_upload_walkthrough(
+    api_client,
+    other_user,
+    approved_property,
+):
+    role = Role.objects.get(name=RoleName.AGENT)
+    UserRole.objects.create(user=other_user, role=role, status=UserRoleStatus.APPROVED)
+    PropertyAssignment.objects.create(
+        property=approved_property,
+        user=other_user,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_WALKTHROUGHS],
+        assigned_by=approved_property.owner,
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("inspection-property-walkthrough-create", args=[approved_property.id]),
+        {
+            "title": "Assigned agent video",
+            "video_file": mp4_file(),
+        },
+        format="multipart",
+    )
+
+    assert response.status_code == 201
+
+
+def test_revoked_assignment_cannot_upload_walkthrough(
+    api_client,
+    other_user,
+    approved_property,
+):
+    PropertyAssignment.objects.create(
+        property=approved_property,
+        user=other_user,
+        relationship_type=PropertyAssignmentType.AUTHORIZED_REPRESENTATIVE,
+        status=PropertyAssignmentStatus.REVOKED,
+        capabilities=[PropertyAssignmentCapability.MANAGE_WALKTHROUGHS],
+        assigned_by=approved_property.owner,
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("inspection-property-walkthrough-create", args=[approved_property.id]),
+        {
+            "title": "Revoked representative video",
             "video_file": mp4_file(),
         },
         format="multipart",

@@ -49,6 +49,15 @@
 | `WALKTHROUGH_ALLOWED_EXTENSIONS` | `.mp4,.webm` | Comma-separated allowed walkthrough video extensions. |
 | `WALKTHROUGH_STORAGE_BUCKET` | `realityng-walkthroughs` | Bucket for moderated public walkthrough videos. |
 | `WALKTHROUGH_REQUIRE_MODERATION` | `true` | Keeps walkthroughs private until admin approval. |
+| `CONSTRUCTION_EVIDENCE_BUCKET` | `realityng-construction-evidence` | Private bucket for construction project photos, documents, and original walkthrough evidence. |
+| `CONSTRUCTION_SIGNED_URL_EXPIRY_SECONDS` | `300` | Signed URL lifetime for private construction evidence. |
+| `CONSTRUCTION_MAX_IMAGE_SIZE_MB` | `25` | Maximum construction evidence image size. |
+| `CONSTRUCTION_MAX_VIDEO_SIZE_MB` | `100` | Maximum construction evidence video size; no synchronous transcoding is performed. |
+| `CONSTRUCTION_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum construction evidence document size. |
+| `CONSTRUCTION_ALLOWED_IMAGE_TYPES` | `image/jpeg,image/png,image/webp` | Allowed construction image MIME types. |
+| `CONSTRUCTION_ALLOWED_VIDEO_TYPES` | `video/mp4,video/webm` | Allowed construction video MIME types. |
+| `CONSTRUCTION_ALLOWED_DOCUMENT_TYPES` | `application/pdf` | Allowed construction document MIME types. |
+| `CONSTRUCTION_ALLOWED_EXTENSIONS` | `.jpg,.jpeg,.png,.webp,.mp4,.webm,.pdf` | Allowed construction evidence file extensions. |
 | `INSPECTION_EVIDENCE_BUCKET` | `realityng-inspection-evidence` | Private bucket for inspection evidence. |
 | `INSPECTION_REPORT_BUCKET` | `realityng-inspection-reports` | Private bucket for inspection report documents. |
 | `INSPECTION_SIGNED_URL_EXPIRY_SECONDS` | `300` | Signed inspection report/evidence URL lifetime in seconds. |

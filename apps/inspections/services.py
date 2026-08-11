@@ -11,7 +11,9 @@ from apps.inspections.choices import (
     WalkthroughStatus,
 )
 from apps.inspections.models import InspectionRequest, InspectionTimelineEvent
+from apps.properties.choices import PropertyAssignmentCapability
 from apps.properties.models import Property
+from apps.properties.services import user_has_property_capability
 
 
 def emit_inspection_event(
@@ -44,19 +46,18 @@ def create_timeline_event(
 
 
 def user_can_upload_walkthrough(user: User, prop: Property) -> bool:
-    """Conservative MVP policy until property management assignments exist.
-
-    The product policy allows landlords, assigned agents, verified property
-    managers, and admins. The current property schema has a single owner field
-    and no assignment/management relationship, so non-owner agent/manager
-    uploads are intentionally rejected rather than trusted by role alone.
-    """
     if not user or not user.is_authenticated or user.is_suspended or not user.is_active:
         return False
     if user_is_admin(user):
         return True
-    return prop.owner_id == user.id and (
+    if prop.owner_id == user.id and (
         user_has_role(user, RoleName.LANDLORD) or user_has_role(user, RoleName.AGENT)
+    ):
+        return True
+    return user_has_property_capability(
+        user,
+        prop,
+        PropertyAssignmentCapability.MANAGE_WALKTHROUGHS,
     )
 
 
