@@ -18,7 +18,25 @@ Current backend enforcement is conservative because the property model does not 
 - admins;
 - owners of the property who hold an approved landlord or agent role.
 
-Future work should add an explicit managed-property relationship before enabling non-owner verified property managers.
+Future work must add an explicit managed-property or assigned-agent relationship before enabling non-owner verified property managers or assigned agents. Do not broaden walkthrough upload permissions by role name alone.
+
+## Deferred Permission Prerequisite
+
+Broad walkthrough upload permissions are deferred until the data model can prove a user's relationship to a property.
+
+Required before widening access:
+
+- A property assignment or property management model.
+- Clear relationship types such as `owner`, `assigned_agent`, `verified_property_manager`, and `admin`.
+- Status fields that show whether the relationship is active, pending, suspended, or revoked.
+- Object-level permission checks based on the property relationship, not only the user's role.
+- Admin audit events when assignments are created, changed, suspended, or revoked.
+- Regression tests proving unrelated agents, unrelated property managers, buyers, renters, and anonymous users cannot upload walkthroughs.
+
+Until this prerequisite is implemented, Sprint 10 walkthrough uploads remain limited to:
+
+- admins;
+- actual property owners who hold an approved landlord or agent role.
 
 ## Moderation
 
