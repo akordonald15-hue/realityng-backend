@@ -4,6 +4,7 @@ from io import BytesIO
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APIClient
 
@@ -21,8 +22,17 @@ from apps.construction.models import (
     ConstructionProject,
     ProjectStakeholder,
 )
-from apps.properties.choices import ListingType, PropertyStatus, PropertyType
-from apps.properties.models import Property
+from apps.properties.choices import (
+    ListingType,
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+    PropertyStatus,
+    PropertyType,
+)
+from apps.properties.models import Property, PropertyAssignment
+from apps.trust.choices import VerificationStatus, VerificationType
+from apps.trust.models import VerificationRequest
 
 pytestmark = pytest.mark.django_db
 
@@ -103,6 +113,23 @@ def image_file():
     return SimpleUploadedFile("site.jpg", buffer.getvalue(), content_type="image/jpeg")
 
 
+def create_property(owner: User, title: str) -> Property:
+    return Property.objects.create(
+        owner=owner,
+        title=title,
+        description="A managed property.",
+        property_type=PropertyType.HOUSE,
+        listing_type=ListingType.SALE,
+        price=Decimal("75000000.00"),
+        currency="NGN",
+        country="Nigeria",
+        state="Lagos",
+        city="Lekki",
+        address="Managed address",
+        status=PropertyStatus.APPROVED,
+    )
+
+
 def test_owner_can_create_construction_project(api_client, owner, property_listing):
     api_client.force_authenticate(owner)
 
@@ -138,6 +165,160 @@ def test_stranger_cannot_create_project_for_unowned_property(
             "name": "Unauthorized Build",
             "project_type": "new_build",
         },
+        format="json",
+    )
+
+    assert response.status_code == 403
+
+
+def test_assignment_capability_is_property_scoped(api_client, owner, project_manager):
+    property_a = create_property(owner, "Assigned Property A")
+    property_b = create_property(owner, "Unassigned Property B")
+    PropertyAssignment.objects.create(
+        property=property_a,
+        user=project_manager,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_CONSTRUCTION],
+        assigned_by=owner,
+    )
+    api_client.force_authenticate(project_manager)
+
+    allowed = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(property_a.id), "name": "Allowed construction"},
+        format="json",
+    )
+    denied = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(property_b.id), "name": "Denied construction"},
+        format="json",
+    )
+
+    assert allowed.status_code == 201
+    assert denied.status_code == 403
+
+
+def test_assignment_capability_does_not_leak_without_required_capability(
+    api_client,
+    owner,
+    project_manager,
+    project,
+):
+    PropertyAssignment.objects.create(
+        property=project.property,
+        user=project_manager,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_WALKTHROUGHS],
+        assigned_by=owner,
+    )
+    project.project_manager = None
+    project.save(update_fields=["project_manager", "updated_at"])
+    api_client.force_authenticate(project_manager)
+
+    detail = api_client.get(reverse("construction-projects-detail", args=[project.slug]))
+    listing = api_client.get(reverse("construction-projects-list"))
+
+    assert detail.status_code == 403
+    assert all(item["id"] != str(project.id) for item in listing.data["results"])
+
+
+@pytest.mark.parametrize(
+    ("assignment_status", "expires_delta"),
+    [
+        (PropertyAssignmentStatus.REVOKED, None),
+        (PropertyAssignmentStatus.SUSPENDED, None),
+        (PropertyAssignmentStatus.ACTIVE, -1),
+    ],
+)
+def test_inactive_or_expired_assignment_cannot_create_project(
+    api_client,
+    owner,
+    property_listing,
+    project_manager,
+    assignment_status,
+    expires_delta,
+):
+    expires_at = (
+        timezone.now() + timezone.timedelta(days=expires_delta)
+        if expires_delta is not None
+        else None
+    )
+    PropertyAssignment.objects.create(
+        property=property_listing,
+        user=project_manager,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=assignment_status,
+        capabilities=[PropertyAssignmentCapability.MANAGE_CONSTRUCTION],
+        assigned_by=owner,
+        expires_at=expires_at,
+    )
+    api_client.force_authenticate(project_manager)
+
+    response = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(property_listing.id), "name": "Inactive assignment build"},
+        format="json",
+    )
+
+    assert response.status_code == 403
+
+
+def test_property_manager_assignment_requires_approved_trust_verification(
+    api_client,
+    owner,
+    property_listing,
+    project_manager,
+):
+    PropertyAssignment.objects.create(
+        property=property_listing,
+        user=project_manager,
+        relationship_type=PropertyAssignmentType.PROPERTY_MANAGER,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_CONSTRUCTION],
+        assigned_by=owner,
+    )
+    api_client.force_authenticate(project_manager)
+
+    denied = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(property_listing.id), "name": "Unverified manager build"},
+        format="json",
+    )
+    VerificationRequest.objects.create(
+        user=project_manager,
+        verification_type=VerificationType.AGENT,
+        status=VerificationStatus.APPROVED,
+    )
+    allowed = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(property_listing.id), "name": "Verified manager build"},
+        format="json",
+    )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 201
+
+
+def test_stakeholder_does_not_gain_property_management_authority(
+    api_client,
+    project,
+    investor,
+):
+    ProjectStakeholder.objects.create(
+        project=project,
+        user=investor,
+        stakeholder_role=ProjectStakeholderRole.INVESTOR,
+        access_level=ProjectAccessLevel.READ_ONLY,
+        status=ProjectStakeholderStatus.ACTIVE,
+        invited_by=project.owner,
+    )
+    api_client.force_authenticate(investor)
+
+    response = api_client.post(
+        reverse("construction-projects-list"),
+        {"property_id": str(project.property_id), "name": "Investor managed build"},
         format="json",
     )
 
@@ -206,6 +387,60 @@ def test_weighted_progress_update_preserves_history_and_updates_project(
     assert approved.data["status"] == ConstructionProgressUpdateStatus.APPROVED
     assert milestone.progress_percent == Decimal("60.00")
     assert project.overall_progress == Decimal("60.00")
+
+
+def test_weighted_progress_calculation_uses_milestone_weights(
+    api_client,
+    project,
+    project_manager,
+):
+    foundation = ConstructionMilestone.objects.create(
+        project=project,
+        name="Foundation",
+        sequence=1,
+        weight=Decimal("30.00"),
+        progress_percent=Decimal("100.00"),
+    )
+    structure = ConstructionMilestone.objects.create(
+        project=project,
+        name="Structure",
+        sequence=2,
+        weight=Decimal("40.00"),
+        progress_percent=Decimal("50.00"),
+    )
+    finishing = ConstructionMilestone.objects.create(
+        project=project,
+        name="Finishing",
+        sequence=3,
+        weight=Decimal("30.00"),
+        progress_percent=Decimal("0.00"),
+    )
+    api_client.force_authenticate(project_manager)
+
+    for milestone in [foundation, structure, finishing]:
+        created = api_client.post(
+            reverse("construction-project-updates-list", args=[project.slug]),
+            {
+                "milestone": str(milestone.id),
+                "title": f"{milestone.name} progress",
+                "summary": "Progress update.",
+                "current_progress": str(milestone.progress_percent),
+            },
+            format="json",
+        )
+        api_client.post(
+            reverse("construction-project-updates-submit", args=[project.slug, created.data["id"]])
+        )
+        api_client.post(
+            reverse(
+                "construction-project-updates-approve",
+                args=[project.slug, created.data["id"]],
+            )
+        )
+
+    project.refresh_from_db()
+
+    assert project.overall_progress == Decimal("50.00")
 
 
 def test_completed_inspection_required_before_inspection_milestone_completes(

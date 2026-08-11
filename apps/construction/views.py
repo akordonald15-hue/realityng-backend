@@ -109,6 +109,25 @@ class ConstructionProjectViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSe
             )
         ).distinct()
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        if not user_is_admin(request.user):
+            queryset = [
+                project for project in queryset if user_can_view_project(request.user, project)
+            ]
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        project = self.get_object()
+        if not user_can_view_project(request.user, project):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        return Response(self.get_serializer(project).data)
+
     def perform_create(self, serializer):
         prop = get_object_or_404(Property, id=serializer.validated_data.pop("property_id"))
         project_manager_id = serializer.validated_data.pop("project_manager_id", None)

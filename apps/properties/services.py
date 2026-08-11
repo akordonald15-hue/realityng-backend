@@ -5,8 +5,14 @@ from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.accounts.services import create_audit_log, user_is_admin
-from apps.properties.choices import PropertyAssignmentCapability, PropertyAssignmentStatus
+from apps.properties.choices import (
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+)
 from apps.properties.models import Inquiry, Property, PropertyAssignment, RentalApplication, Viewing
+from apps.trust.choices import VerificationStatus, VerificationType
+from apps.trust.models import VerificationRequest
 
 
 def emit_inquiry_event(
@@ -90,7 +96,22 @@ def user_has_property_capability(
         status=PropertyAssignmentStatus.ACTIVE,
     ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
     capability_value = str(capability)
-    return any(capability_value in (assignment.capabilities or []) for assignment in assignments)
+    return any(
+        capability_value in (assignment.capabilities or [])
+        and _assignment_principal_is_eligible(assignment)
+        for assignment in assignments
+    )
+
+
+def _assignment_principal_is_eligible(assignment: PropertyAssignment) -> bool:
+    if assignment.relationship_type != PropertyAssignmentType.PROPERTY_MANAGER:
+        return True
+    today = timezone.localdate()
+    return VerificationRequest.objects.filter(
+        user=assignment.user,
+        verification_type__in=[VerificationType.AGENT, VerificationType.LANDLORD],
+        status=VerificationStatus.APPROVED,
+    ).filter(Q(expiry_date__isnull=True) | Q(expiry_date__gte=today)).exists()
 
 
 def emit_property_assignment_event(

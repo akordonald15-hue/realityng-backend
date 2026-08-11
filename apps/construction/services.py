@@ -104,6 +104,8 @@ def user_can_view_project(user: User, project: ConstructionProject) -> bool:
 
 
 def user_can_manage_project(user: User, project: ConstructionProject) -> bool:
+    if not user or not user.is_authenticated or user.is_suspended or not user.is_active:
+        return False
     if user_is_admin(user) or project.owner_id == user.id or project.project_manager_id == user.id:
         return True
     stakeholder = _active_stakeholder(user, project)
@@ -131,6 +133,8 @@ def user_can_submit_project_update(user: User, project: ConstructionProject) -> 
 
 
 def user_can_view_evidence(user: User, evidence) -> bool:
+    if not user or not user.is_authenticated or user.is_suspended or not user.is_active:
+        return False
     if user_is_admin(user):
         return True
     if evidence.visibility == "admins_only":
