@@ -223,9 +223,13 @@ SPECTACULAR_SETTINGS = {
         "ViewingStatusEnum": "apps.properties.choices.ViewingStatus",
         "VerificationStatusEnum": "apps.trust.choices.VerificationStatus",
         "VerificationTypeEnum": "apps.trust.choices.VerificationType",
+        "InspectionPriorityEnum": "apps.inspections.choices.InspectionPriority",
         "InspectionRequestStatusEnum": "apps.inspections.choices.InspectionRequestStatus",
         "WalkthroughStatusEnum": "apps.inspections.choices.WalkthroughStatus",
         "InspectionReportStatusEnum": "apps.inspections.choices.InspectionReportStatus",
+        "LeadActivityTypeEnum": "apps.properties.choices.LeadActivityType",
+        "LeadPipelineStageEnum": "apps.properties.choices.LeadPipelineStage",
+        "LeadPriorityEnum": "apps.properties.choices.LeadPriority",
     },
 }
 

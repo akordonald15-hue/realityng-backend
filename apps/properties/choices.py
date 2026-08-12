@@ -102,8 +102,39 @@ class PropertyAssignmentStatus(models.TextChoices):
 
 class PropertyAssignmentCapability(models.TextChoices):
     MANAGE_LISTING = "manage_listing", "Manage Listing"
+    MANAGE_LEADS = "manage_leads", "Manage Leads"
     MANAGE_WALKTHROUGHS = "manage_walkthroughs", "Manage Walkthroughs"
     MANAGE_VIEWINGS = "manage_viewings", "Manage Viewings"
     MANAGE_INSPECTIONS = "manage_inspections", "Manage Inspections"
     MANAGE_CONSTRUCTION = "manage_construction", "Manage Construction"
     VIEW_PRIVATE_PROJECT_DATA = "view_private_project_data", "View Private Project Data"
+
+
+class LeadPriority(models.TextChoices):
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+    URGENT = "urgent", "Urgent"
+
+
+class LeadPipelineStage(models.TextChoices):
+    NEW = "new", "New"
+    CONTACTED = "contacted", "Contacted"
+    QUALIFIED = "qualified", "Qualified"
+    VIEWING_SCHEDULED = "viewing_scheduled", "Viewing Scheduled"
+    APPLICATION_STARTED = "application_started", "Application Started"
+    APPLICATION_SUBMITTED = "application_submitted", "Application Submitted"
+    NEGOTIATING = "negotiating", "Negotiating"
+    CONVERTED = "converted", "Converted"
+    CLOSED_LOST = "closed_lost", "Closed Lost"
+
+
+class LeadActivityType(models.TextChoices):
+    NOTE = "note", "Note"
+    CALL = "call", "Call"
+    WHATSAPP = "whatsapp", "WhatsApp"
+    EMAIL = "email", "Email"
+    FOLLOW_UP_SCHEDULED = "follow_up_scheduled", "Follow-up Scheduled"
+    FOLLOW_UP_COMPLETED = "follow_up_completed", "Follow-up Completed"
+    STATUS_CHANGED = "status_changed", "Status Changed"
+    ASSIGNED = "assigned", "Assigned"
