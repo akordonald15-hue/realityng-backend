@@ -72,6 +72,7 @@ LOCAL_APPS = [
     "apps.services",
     "apps.inspections",
     "apps.construction",
+    "apps.notifications",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -189,6 +190,9 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_CONSTRUCTION_SIGNED_URL_RATE",
             default="120/hour",
         ),
+        "notification_write": env("DRF_THROTTLE_NOTIFICATION_WRITE_RATE", default="120/hour"),
+        "message_thread_create": env("DRF_THROTTLE_MESSAGE_THREAD_CREATE_RATE", default="30/hour"),
+        "message_send": env("DRF_THROTTLE_MESSAGE_SEND_RATE", default="120/hour"),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
@@ -230,6 +234,8 @@ SPECTACULAR_SETTINGS = {
         "LeadActivityTypeEnum": "apps.properties.choices.LeadActivityType",
         "LeadPipelineStageEnum": "apps.properties.choices.LeadPipelineStage",
         "LeadPriorityEnum": "apps.properties.choices.LeadPriority",
+        "NotificationTypeEnum": "apps.notifications.choices.NotificationType",
+        "NotificationChannelEnum": "apps.notifications.choices.NotificationChannel",
     },
 }
 
