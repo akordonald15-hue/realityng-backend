@@ -55,6 +55,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "corsheaders",
+    "channels",
     "django_celery_beat",
     "django_filters",
     "drf_spectacular",
@@ -75,7 +76,7 @@ LOCAL_APPS = [
     "apps.notifications",
 ]
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -437,6 +438,21 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
+NOTIFICATION_EMAIL_TASKS_ENABLED = env.bool(
+    "NOTIFICATION_EMAIL_TASKS_ENABLED",
+    default=not DEBUG,
+)
+
+CHANNEL_LAYER_REDIS_URL = env("CHANNEL_LAYER_REDIS_URL", default=env("REDIS_URL"))
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [CHANNEL_LAYER_REDIS_URL],
+            "prefix": env("CHANNEL_LAYER_PREFIX", default="realityng"),
+        },
+    }
+}
 
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", default="http://minio:9000")
 MINIO_PUBLIC_ENDPOINT = env("MINIO_PUBLIC_ENDPOINT", default=MINIO_ENDPOINT)

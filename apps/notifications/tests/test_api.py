@@ -4,7 +4,7 @@ import pytest
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from apps.accounts.models import User
+from apps.accounts.models import AuditLog, User
 from apps.notifications.choices import NotificationType
 from apps.notifications.models import (
     ConversationParticipant,
@@ -236,3 +236,146 @@ def test_closed_thread_rejects_new_messages(api_client, buyer, inquiry):
 
     assert response.status_code == 400
     assert Message.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_message_notifications_respect_recipient_preferences(
+    api_client,
+    owner,
+    buyer,
+    inquiry,
+    monkeypatch,
+):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    NotificationPreference.objects.create(user=owner, message_notifications=False)
+    queued = []
+    monkeypatch.setattr(
+        "apps.notifications.services.queue_transactional_email",
+        lambda **kwargs: queued.append(kwargs),
+    )
+
+    api_client.force_authenticate(buyer)
+    response = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Preference-aware message."},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert Message.objects.filter(thread=thread).count() == 1
+    assert not Notification.objects.filter(
+        recipient=owner,
+        notification_type=NotificationType.NEW_MESSAGE,
+    ).exists()
+    assert queued == []
+
+
+@pytest.mark.django_db
+def test_message_create_rejects_empty_and_oversized_bodies(api_client, buyer, inquiry):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=inquiry.property_owner)
+
+    api_client.force_authenticate(buyer)
+    empty = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "   "},
+        format="json",
+    )
+    oversized = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "x" * 4001},
+        format="json",
+    )
+
+    assert empty.status_code == 400
+    assert oversized.status_code == 400
+    assert Message.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_thread_messages_are_paginated_and_unread_counts_are_tracked(
+    api_client, owner, buyer, inquiry
+):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    Message.objects.create(thread=thread, sender=buyer, body="One")
+    Message.objects.create(thread=thread, sender=buyer, body="Two")
+
+    api_client.force_authenticate(owner)
+    list_response = api_client.get(reverse("conversation-threads-list"))
+    unread_response = api_client.get(reverse("conversation-threads-unread-count"))
+    messages_response = api_client.get(reverse("conversation-threads-messages", args=[thread.id]))
+
+    assert list_response.status_code == 200
+    assert list_response.data["results"][0]["unread_count"] == 2
+    assert unread_response.status_code == 200
+    assert unread_response.data["unread_count"] == 2
+    assert messages_response.status_code == 200
+    assert "results" in messages_response.data
+
+    mark_response = api_client.post(reverse("conversation-threads-mark-read", args=[thread.id]))
+    assert mark_response.status_code == 200
+    assert api_client.get(reverse("conversation-threads-unread-count")).data["unread_count"] == 0
+
+
+@pytest.mark.django_db
+def test_message_send_and_mark_read_create_audit_events(api_client, owner, buyer, inquiry):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+
+    api_client.force_authenticate(buyer)
+    response = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Audited message."},
+        format="json",
+    )
+    assert response.status_code == 201
+    assert AuditLog.objects.filter(actor=buyer, action="message.sent").exists()
+
+    mark_response = api_client.post(reverse("conversation-threads-mark-read", args=[thread.id]))
+    assert mark_response.status_code == 200
+    assert AuditLog.objects.filter(actor=buyer, action="message.read").exists()
+
+
+@pytest.mark.django_db
+def test_transactional_email_provider_failure_does_not_raise(owner, monkeypatch):
+    notification = Notification.objects.create(
+        recipient=owner,
+        notification_type=NotificationType.SYSTEM,
+        title="System notice",
+        body="A safe email body.",
+    )
+
+    class FailingProvider:
+        def send(self, message):
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        "apps.notifications.services.get_email_provider",
+        lambda: FailingProvider(),
+    )
+
+    from apps.notifications.services import send_notification_email_now
+
+    assert send_notification_email_now(notification_id=notification.id) is False

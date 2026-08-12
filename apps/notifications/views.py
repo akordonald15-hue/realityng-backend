@@ -7,7 +7,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from apps.notifications.choices import NotificationType
 from apps.notifications.models import (
     ConversationParticipant,
     ConversationThread,
@@ -19,6 +18,12 @@ from apps.notifications.serializers import (
     MessageSerializer,
     NotificationPreferenceSerializer,
     NotificationSerializer,
+)
+from apps.notifications.services import (
+    annotate_threads_with_unread_counts,
+    create_message,
+    mark_thread_read,
+    unread_message_count_for_user,
 )
 
 
@@ -122,6 +127,12 @@ class ConversationThreadViewSet(
             "participants__user",
         ).distinct()
 
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        return annotate_threads_with_unread_counts(queryset, self.request.user).order_by(
+            "-updated_at"
+        )
+
     def perform_create(self, serializer):
         thread = serializer.save(created_by=self.request.user)
         participant_ids = self._participant_ids_for_thread(thread)
@@ -150,41 +161,30 @@ class ConversationThreadViewSet(
     def messages(self, request, pk=None):
         thread = self.get_object()
         if request.method == "GET":
-            queryset = thread.messages.all()
+            queryset = thread.messages.select_related("sender").order_by("created_at", "id")
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = MessageSerializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
             serializer = MessageSerializer(queryset, many=True)
             return Response(serializer.data)
 
         serializer = MessageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if thread.is_closed:
-            return Response({"detail": "This conversation is closed."}, status=400)
-        message = serializer.save(thread=thread, sender=request.user)
-        self._notify_message_recipients(thread, request.user, message)
+        message = create_message(
+            thread=thread,
+            sender=request.user,
+            body=serializer.validated_data["body"],
+        )
         return Response(MessageSerializer(message).data, status=201)
 
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
         thread = self.get_object()
-        participant, _ = ConversationParticipant.objects.get_or_create(
-            thread=thread, user=request.user
-        )
-        participant.last_read_at = timezone.now()
-        participant.save(update_fields=["last_read_at", "updated_at"])
+        mark_thread_read(thread=thread, user=request.user)
         return Response({"marked_read": True})
 
-    def _notify_message_recipients(self, thread, sender, message) -> None:
-        recipients = [
-            participant.user
-            for participant in thread.participants.select_related("user")
-            if participant.user_id != sender.id
-        ]
-        for recipient in recipients:
-            Notification.objects.create(
-                recipient=recipient,
-                notification_type=NotificationType.NEW_MESSAGE,
-                title="New message",
-                body=message.body[:200],
-                related_entity_type=message.__class__.__name__,
-                related_entity_id=message.id,
-                action_url=f"/dashboard/messages/{thread.id}",
-            )
+    @action(detail=False, methods=["get"], url_path="unread-count")
+    def unread_count(self, request):
+        count = unread_message_count_for_user(request.user)
+        return Response({"unread_count": count, "count": count})

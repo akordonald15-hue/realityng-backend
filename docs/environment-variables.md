@@ -21,6 +21,9 @@
 | `REDIS_URL` | `redis://redis:6379/0` | Redis cache URL. |
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery broker URL. |
 | `CELERY_RESULT_BACKEND` | `redis://redis:6379/0` | Celery result backend URL. |
+| `CHANNEL_LAYER_REDIS_URL` | `redis://redis:6379/0` | Redis URL used by Django Channels for realtime WebSocket fan-out. Defaults to `REDIS_URL`. |
+| `CHANNEL_LAYER_PREFIX` | `realityng` | Redis key prefix for the Django Channels layer. |
+| `NOTIFICATION_EMAIL_TASKS_ENABLED` | `false` locally | Enables Celery-backed transactional notification email queueing. Keep disabled until email workers and provider credentials are configured. |
 | `MINIO_ENDPOINT` | `http://minio:9000` | S3-compatible local object storage endpoint. |
 | `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Browser-accessible object storage endpoint used when generating media URLs. |
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key. |

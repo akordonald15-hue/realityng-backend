@@ -42,6 +42,7 @@ class Notification(BaseModel):
     def is_read(self) -> bool:
         return self.read_at is not None
 
+
 class NotificationPreference(BaseModel):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -57,6 +58,7 @@ class NotificationPreference(BaseModel):
 
     def __str__(self) -> str:
         return f"NotificationPreference<{self.user_id}>"
+
 
 class ConversationThread(BaseModel):
     property = models.ForeignKey(
@@ -118,6 +120,10 @@ class ConversationParticipant(BaseModel):
                 fields=["thread", "user"], name="unique_thread_participant"
             )
         ]
+        indexes = [
+            models.Index(fields=["user", "thread"]),
+            models.Index(fields=["thread", "user"]),
+        ]
 
     def __str__(self) -> str:
         return f"ConversationParticipant<{self.thread_id}:{self.user_id}>"
@@ -138,8 +144,11 @@ class Message(BaseModel):
     edited_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["created_at"]
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["thread", "created_at"]),
+            models.Index(fields=["thread", "sender", "created_at"]),
+        ]
 
     def __str__(self) -> str:
         return f"Message<{self.id}>"
-

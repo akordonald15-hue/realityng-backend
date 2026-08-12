@@ -68,6 +68,7 @@ class ConversationParticipantSerializer(serializers.ModelSerializer):
 class ConversationThreadSerializer(serializers.ModelSerializer):
     participants = ConversationParticipantSerializer(many=True, read_only=True)
     last_message = serializers.SerializerMethodField()
+    unread_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = ConversationThread
@@ -81,6 +82,7 @@ class ConversationThreadSerializer(serializers.ModelSerializer):
             "is_closed",
             "participants",
             "last_message",
+            "unread_count",
             "created_at",
             "updated_at",
         ]
@@ -89,6 +91,7 @@ class ConversationThreadSerializer(serializers.ModelSerializer):
             "created_by",
             "participants",
             "last_message",
+            "unread_count",
             "created_at",
             "updated_at",
         ]
