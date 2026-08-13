@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
+import socket
 from dataclasses import dataclass
 from datetime import timedelta
+from urllib.parse import urlparse
 from uuid import UUID
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.db.models import Count, F, Max, Model, Q
 from django.utils import timezone
@@ -137,10 +141,12 @@ def should_notify(
 def queue_transactional_email(*, notification_id) -> EmailDeliveryResult:
     if not getattr(settings, "NOTIFICATION_EMAIL_TASKS_ENABLED", False):
         return EmailDeliveryResult(queued=False, reason="disabled")
+    if not _celery_broker_is_reachable():
+        return EmailDeliveryResult(queued=False, reason="broker_unavailable")
     try:
         from apps.notifications.tasks import send_notification_email
 
-        send_notification_email.delay(str(notification_id))
+        send_notification_email.apply_async(args=[str(notification_id)], retry=False)
         return EmailDeliveryResult(queued=True)
     except Exception as exc:  # pragma: no cover - depends on broker availability
         logger.warning(
@@ -219,10 +225,16 @@ def enqueue_realtime_message(message: Message) -> RealtimeOutboxEvent:
 def queue_realtime_outbox_processing(*, event_id) -> bool:
     if not getattr(settings, "REALTIME_OUTBOX_TASKS_ENABLED", False):
         return False
+    if not _celery_broker_is_reachable():
+        logger.warning(
+            "realtime.outbox.queue_skipped",
+            extra={"event_id": str(event_id), "reason": "broker_unavailable"},
+        )
+        return False
     try:
         from apps.notifications.tasks import process_realtime_outbox_event
 
-        process_realtime_outbox_event.delay(str(event_id))
+        process_realtime_outbox_event.apply_async(args=[str(event_id)], retry=False)
         return True
     except Exception as exc:  # pragma: no cover - depends on broker availability
         logger.warning(
@@ -240,7 +252,7 @@ def broadcast_notification(notification_id) -> None:
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return
-    payload = NotificationSerializer(notification).data
+    payload = _json_safe_payload(NotificationSerializer(notification).data)
     unread_count = Notification.objects.filter(
         recipient=notification.recipient,
         read_at__isnull=True,
@@ -411,9 +423,28 @@ def broadcast_message(message_id) -> None:
         thread_group_name(message.thread_id),
         {
             "type": "message.created",
-            "message": MessageSerializer(message).data,
+            "message": _json_safe_payload(MessageSerializer(message).data),
         },
     )
+
+
+def _json_safe_payload(payload):
+    return json.loads(json.dumps(payload, cls=DjangoJSONEncoder))
+
+
+def _celery_broker_is_reachable() -> bool:
+    broker_url = getattr(settings, "CELERY_BROKER_URL", "")
+    parsed = urlparse(broker_url)
+    if parsed.scheme not in {"redis", "rediss"}:
+        return True
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    timeout = float(getattr(settings, "CELERY_BROKER_CONNECTION_TIMEOUT", 2.0))
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def publish_realtime_outbox_event(event: RealtimeOutboxEvent) -> None:

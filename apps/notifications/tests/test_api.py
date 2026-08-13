@@ -1,5 +1,7 @@
 from decimal import Decimal
+from uuid import uuid4
 
+import msgpack
 import pytest
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -577,6 +579,76 @@ def test_realtime_outbox_retry_can_deliver_failed_event(
     event.refresh_from_db()
     assert event.status == RealtimeOutboxEvent.Status.DELIVERED
     assert event.id in delivered
+
+
+@pytest.mark.django_db
+def test_realtime_broadcast_payloads_are_redis_msgpack_safe(
+    owner, buyer, inquiry, monkeypatch
+):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    message = Message.objects.create(
+        thread=thread,
+        sender=buyer,
+        body="Redis payload safety.",
+        client_message_id=uuid4(),
+        thread_sequence=1,
+    )
+    notification = Notification.objects.create(
+        recipient=owner,
+        notification_type=NotificationType.NEW_MESSAGE,
+        title="New message",
+        related_entity_type="Message",
+        related_entity_id=message.id,
+    )
+    sent = []
+
+    class MsgpackStrictChannelLayer:
+        async def group_send(self, group, payload):
+            msgpack.packb(payload)
+            sent.append((group, payload))
+
+    monkeypatch.setattr(
+        "apps.notifications.services.get_channel_layer",
+        lambda: MsgpackStrictChannelLayer(),
+    )
+
+    from apps.notifications.services import broadcast_message, broadcast_notification
+
+    broadcast_message(message.id)
+    broadcast_notification(notification.id)
+
+    assert sent[0][1]["message"]["id"] == str(message.id)
+    assert sent[0][1]["message"]["client_message_id"] == str(message.client_message_id)
+    assert sent[1][1]["notification"]["id"] == str(notification.id)
+    assert sent[1][1]["notification"]["related_entity_id"] == str(message.id)
+
+
+@pytest.mark.django_db
+def test_realtime_outbox_enqueue_skips_unreachable_broker(settings, monkeypatch):
+    settings.REALTIME_OUTBOX_TASKS_ENABLED = True
+    settings.CELERY_BROKER_URL = "redis://broker-unavailable.invalid:6379/0"
+    settings.CELERY_BROKER_CONNECTION_TIMEOUT = 0.01
+    called = []
+
+    class UnexpectedTask:
+        def apply_async(self, *args, **kwargs):
+            called.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "apps.notifications.tasks.process_realtime_outbox_event",
+        UnexpectedTask(),
+    )
+
+    from apps.notifications.services import queue_realtime_outbox_processing
+
+    assert queue_realtime_outbox_processing(event_id=uuid4()) is False
+    assert called == []
 
 
 @pytest.mark.django_db

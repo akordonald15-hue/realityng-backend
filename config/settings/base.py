@@ -438,6 +438,20 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BROKER_CONNECTION_TIMEOUT = env.float(
+    "CELERY_BROKER_CONNECTION_TIMEOUT",
+    default=1.0,
+)
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "socket_connect_timeout": env.float(
+        "CELERY_REDIS_SOCKET_CONNECT_TIMEOUT",
+        default=1.0,
+    ),
+    "socket_timeout": env.float(
+        "CELERY_REDIS_SOCKET_TIMEOUT",
+        default=1.0,
+    ),
+}
 NOTIFICATION_EMAIL_TASKS_ENABLED = env.bool(
     "NOTIFICATION_EMAIL_TASKS_ENABLED",
     default=not DEBUG,
