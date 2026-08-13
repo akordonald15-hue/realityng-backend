@@ -69,7 +69,9 @@ services:
       mc mb --ignore-existing local/realityng-inspection-reports &&
       mc anonymous set none local/realityng-inspection-reports &&
       mc mb --ignore-existing local/realityng-construction-evidence &&
-      mc anonymous set none local/realityng-construction-evidence
+      mc anonymous set none local/realityng-construction-evidence &&
+      mc mb --ignore-existing local/realityng-payment-proof-private &&
+      mc anonymous set none local/realityng-payment-proof-private
       "
     networks:
       - realityng-backend
@@ -113,6 +115,11 @@ services:
       CONSTRUCTION_MAX_IMAGE_SIZE_MB: "25"
       CONSTRUCTION_MAX_VIDEO_SIZE_MB: "100"
       CONSTRUCTION_MAX_DOCUMENT_SIZE_MB: "25"
+      PAYMENT_PROOF_BUCKET_NAME: realityng-payment-proof-private
+      PAYMENT_PROOF_SIGNED_URL_EXPIRY: "300"
+      PAYMENT_PROOF_MAX_SIZE_MB: "10"
+      PAYMENT_PROOF_ALLOWED_TYPES: application/pdf,image/jpeg,image/png
+      PAYMENT_PROOF_ALLOWED_EXTENSIONS: .pdf,.jpg,.jpeg,.png
       USE_S3_MEDIA_STORAGE: "true"
       PROPERTY_IMAGE_MAX_COUNT: "30"
       PROPERTY_IMAGE_MAX_SIZE_MB: "10"

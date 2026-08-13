@@ -74,6 +74,7 @@ LOCAL_APPS = [
     "apps.inspections",
     "apps.construction",
     "apps.notifications",
+    "apps.payments",
 ]
 
 INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -191,6 +192,22 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_CONSTRUCTION_SIGNED_URL_RATE",
             default="120/hour",
         ),
+        "payment_transaction_create": env(
+            "DRF_THROTTLE_PAYMENT_TRANSACTION_CREATE_RATE",
+            default="20/hour",
+        ),
+        "payment_proof_upload": env(
+            "DRF_THROTTLE_PAYMENT_PROOF_UPLOAD_RATE",
+            default="20/hour",
+        ),
+        "payment_dispute_create": env(
+            "DRF_THROTTLE_PAYMENT_DISPUTE_CREATE_RATE",
+            default="20/hour",
+        ),
+        "payment_signed_url": env(
+            "DRF_THROTTLE_PAYMENT_SIGNED_URL_RATE",
+            default="120/hour",
+        ),
         "notification_write": env("DRF_THROTTLE_NOTIFICATION_WRITE_RATE", default="120/hour"),
         "message_thread_create": env("DRF_THROTTLE_MESSAGE_THREAD_CREATE_RATE", default="30/hour"),
         "message_send": env("DRF_THROTTLE_MESSAGE_SEND_RATE", default="120/hour"),
@@ -237,6 +254,9 @@ SPECTACULAR_SETTINGS = {
         "LeadPriorityEnum": "apps.properties.choices.LeadPriority",
         "NotificationTypeEnum": "apps.notifications.choices.NotificationType",
         "NotificationChannelEnum": "apps.notifications.choices.NotificationChannel",
+        "PaymentTransactionStatusEnum": "apps.payments.choices.TransactionStatus",
+        "PaymentMilestoneStatusEnum": "apps.payments.choices.MilestoneStatus",
+        "PaymentDisputeStatusEnum": "apps.payments.choices.DisputeStatus",
     },
 }
 
@@ -518,3 +538,18 @@ if SENTRY_DSN:
 
 LOGGING_CONFIG = None
 logging.config.dictConfig(LOGGING)
+
+PAYMENT_PROOF_ALLOWED_EXTENSIONS = env.list(
+    "PAYMENT_PROOF_ALLOWED_EXTENSIONS",
+    default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
+PAYMENT_PROOF_BUCKET_NAME = env(
+    "PAYMENT_PROOF_BUCKET_NAME",
+    default="realityng-payment-proof-private",
+)
+PAYMENT_PROOF_SIGNED_URL_EXPIRY = env.int("PAYMENT_PROOF_SIGNED_URL_EXPIRY", default=300)
+PAYMENT_PROOF_ALLOWED_TYPES = env.list(
+    "PAYMENT_PROOF_ALLOWED_TYPES",
+    default=["application/pdf", "image/jpeg", "image/png"],
+)
+PAYMENT_PROOF_MAX_SIZE_MB = env.int("PAYMENT_PROOF_MAX_SIZE_MB", default=10)
