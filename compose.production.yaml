@@ -8,13 +8,10 @@ services:
       - .env.production
     environment: !reset []
     command: >
-      gunicorn config.wsgi:application
-      --bind 0.0.0.0:8000
-      --workers 1
-      --threads 2
-      --timeout 120
-      --access-logfile -
-      --error-logfile -
+      daphne
+      -b 0.0.0.0
+      -p 8000
+      config.asgi:application
     restart: unless-stopped
     ports: !override
       - "127.0.0.1:18000:8000"
@@ -32,6 +29,40 @@ services:
       minio-create-bucket:
         condition: service_completed_successfully
     mem_limit: 512m
+
+  celery:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: production.txt
+    env_file:
+      - .env.production
+    environment: !reset []
+    restart: unless-stopped
+    volumes: !reset []
+    depends_on: !override
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 256m
+
+  celery-beat:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: production.txt
+    env_file:
+      - .env.production
+    environment: !reset []
+    restart: unless-stopped
+    volumes: !reset []
+    depends_on: !override
+      backend:
+        condition: service_healthy
+      celery:
+        condition: service_started
+    mem_limit: 128m
 
   postgres:
     env_file:
