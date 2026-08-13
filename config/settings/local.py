@@ -11,6 +11,14 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+NOTIFICATION_EMAIL_TASKS_ENABLED = env.bool(  # noqa: F405
+    "NOTIFICATION_EMAIL_TASKS_ENABLED",
+    default=False,
+)
+REALTIME_OUTBOX_TASKS_ENABLED = env.bool(  # noqa: F405
+    "REALTIME_OUTBOX_TASKS_ENABLED",
+    default=False,
+)
 
 if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":  # noqa: F405
     CACHES = {  # noqa: F405

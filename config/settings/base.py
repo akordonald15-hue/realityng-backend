@@ -55,6 +55,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "corsheaders",
+    "channels",
     "django_celery_beat",
     "django_filters",
     "drf_spectacular",
@@ -72,9 +73,10 @@ LOCAL_APPS = [
     "apps.services",
     "apps.inspections",
     "apps.construction",
+    "apps.notifications",
 ]
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+INSTALLED_APPS = ["daphne"] + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -189,6 +191,9 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_CONSTRUCTION_SIGNED_URL_RATE",
             default="120/hour",
         ),
+        "notification_write": env("DRF_THROTTLE_NOTIFICATION_WRITE_RATE", default="120/hour"),
+        "message_thread_create": env("DRF_THROTTLE_MESSAGE_THREAD_CREATE_RATE", default="30/hour"),
+        "message_send": env("DRF_THROTTLE_MESSAGE_SEND_RATE", default="120/hour"),
         "ai_assistant_message": env("DRF_THROTTLE_AI_ASSISTANT_MESSAGE_RATE", default="20/hour"),
     },
 }
@@ -230,6 +235,8 @@ SPECTACULAR_SETTINGS = {
         "LeadActivityTypeEnum": "apps.properties.choices.LeadActivityType",
         "LeadPipelineStageEnum": "apps.properties.choices.LeadPipelineStage",
         "LeadPriorityEnum": "apps.properties.choices.LeadPriority",
+        "NotificationTypeEnum": "apps.notifications.choices.NotificationType",
+        "NotificationChannelEnum": "apps.notifications.choices.NotificationChannel",
     },
 }
 
@@ -431,6 +438,48 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BROKER_CONNECTION_TIMEOUT = env.float(
+    "CELERY_BROKER_CONNECTION_TIMEOUT",
+    default=1.0,
+)
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "socket_connect_timeout": env.float(
+        "CELERY_REDIS_SOCKET_CONNECT_TIMEOUT",
+        default=1.0,
+    ),
+    "socket_timeout": env.float(
+        "CELERY_REDIS_SOCKET_TIMEOUT",
+        default=1.0,
+    ),
+}
+NOTIFICATION_EMAIL_TASKS_ENABLED = env.bool(
+    "NOTIFICATION_EMAIL_TASKS_ENABLED",
+    default=not DEBUG,
+)
+REALTIME_OUTBOX_TASKS_ENABLED = env.bool(
+    "REALTIME_OUTBOX_TASKS_ENABLED",
+    default=not DEBUG,
+)
+WEBSOCKET_ALLOW_QUERY_TOKEN = env.bool("WEBSOCKET_ALLOW_QUERY_TOKEN", default=False)
+WEBSOCKET_MESSAGE_RATE_LIMIT_COUNT = env.int(
+    "WEBSOCKET_MESSAGE_RATE_LIMIT_COUNT",
+    default=20,
+)
+WEBSOCKET_MESSAGE_RATE_LIMIT_WINDOW_SECONDS = env.int(
+    "WEBSOCKET_MESSAGE_RATE_LIMIT_WINDOW_SECONDS",
+    default=10,
+)
+
+CHANNEL_LAYER_REDIS_URL = env("CHANNEL_LAYER_REDIS_URL", default=env("REDIS_URL"))
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [CHANNEL_LAYER_REDIS_URL],
+            "prefix": env("CHANNEL_LAYER_PREFIX", default="realityng"),
+        },
+    }
+}
 
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", default="http://minio:9000")
 MINIO_PUBLIC_ENDPOINT = env("MINIO_PUBLIC_ENDPOINT", default=MINIO_ENDPOINT)

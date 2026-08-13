@@ -282,7 +282,11 @@ class LeadViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gen
             actor=request.user,
             inquiry=inquiry,
             event_name="lead_pipeline_changed",
-            metadata={"previous_stage": previous_stage, "next_stage": next_stage},
+            metadata={
+                "previous_stage": previous_stage,
+                "next_stage": next_stage,
+                "notification_event": "LeadStageChanged",
+            },
         )
         return Response(LeadSerializer(inquiry).data)
 
