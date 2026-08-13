@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 from apps.common.models import BaseModel
 from apps.notifications.choices import NotificationChannel, NotificationType
@@ -141,14 +142,89 @@ class Message(BaseModel):
         related_name="sent_messages",
     )
     body = models.TextField(max_length=4000)
+    client_message_id = models.UUIDField(null=True, blank=True)
+    thread_sequence = models.PositiveIntegerField(null=True, blank=True)
     edited_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["created_at", "id"]
         indexes = [
             models.Index(fields=["thread", "created_at"]),
+            models.Index(fields=["thread", "created_at", "id"]),
+            models.Index(fields=["thread", "thread_sequence"]),
             models.Index(fields=["thread", "sender", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["thread", "sender", "client_message_id"],
+                condition=Q(client_message_id__isnull=False),
+                name="unique_message_client_id_per_sender_thread",
+            ),
+            models.UniqueConstraint(
+                fields=["thread", "thread_sequence"],
+                condition=Q(thread_sequence__isnull=False),
+                name="unique_message_sequence_per_thread",
+            ),
         ]
 
     def __str__(self) -> str:
         return f"Message<{self.id}>"
+
+
+class RealtimeOutboxEvent(BaseModel):
+    class EventType(models.TextChoices):
+        MESSAGE_CREATED = "message.created", "Message Created"
+        NOTIFICATION_CREATED = "notification.created", "Notification Created"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        DELIVERED = "delivered", "Delivered"
+        FAILED = "failed", "Failed"
+        DEAD = "dead", "Dead"
+
+    event_type = models.CharField(max_length=80, choices=EventType.choices)
+    aggregate_type = models.CharField(max_length=80)
+    aggregate_id = models.UUIDField()
+    recipient_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="realtime_outbox_events",
+    )
+    conversation_thread = models.ForeignKey(
+        ConversationThread,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="realtime_outbox_events",
+    )
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=255, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(fields=["status", "next_attempt_at", "created_at"]),
+            models.Index(fields=["event_type", "aggregate_id"]),
+            models.Index(fields=["recipient_user", "status"]),
+            models.Index(fields=["conversation_thread", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event_type", "aggregate_id"],
+                name="unique_realtime_outbox_event_per_aggregate",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"RealtimeOutboxEvent<{self.event_type}:{self.aggregate_id}>"

@@ -133,7 +133,11 @@ class ConversationThreadViewSet(
             "-updated_at"
         )
 
-    def perform_create(self, serializer):
+    def perform_create(self, serializer) -> bool:
+        existing_thread = self._existing_thread_for_context(serializer.validated_data)
+        if existing_thread:
+            serializer.instance = existing_thread
+            return False
         thread = serializer.save(created_by=self.request.user)
         participant_ids = self._participant_ids_for_thread(thread)
         participant_ids.add(self.request.user.id)
@@ -142,6 +146,29 @@ class ConversationThreadViewSet(
                 thread=thread,
                 user_id=user_id,
             )
+        return True
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        created = self.perform_create(serializer)
+        status_code = 201 if created else 200
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status_code, headers=headers)
+
+    def _existing_thread_for_context(self, data):
+        queryset = ConversationThread.objects.filter(
+            property=data.get("property"),
+            inquiry=data.get("inquiry"),
+            viewing=data.get("viewing"),
+            application=data.get("application"),
+        )
+        return (
+            queryset.filter(participants__user=self.request.user)
+            .select_related("property", "inquiry", "viewing", "application", "created_by")
+            .prefetch_related("participants", "participants__user")
+            .first()
+        )
 
     def _participant_ids_for_thread(self, thread) -> set:
         participant_ids = {thread.property.owner_id}
@@ -161,7 +188,25 @@ class ConversationThreadViewSet(
     def messages(self, request, pk=None):
         thread = self.get_object()
         if request.method == "GET":
-            queryset = thread.messages.select_related("sender").order_by("created_at", "id")
+            queryset = thread.messages.select_related("sender").order_by(
+                "thread_sequence",
+                "created_at",
+                "id",
+            )
+            after = request.query_params.get("after")
+            if after:
+                after_message = (
+                    thread.messages.filter(id=after)
+                    .only("id", "created_at", "thread_sequence")
+                    .first()
+                )
+                if after_message:
+                    if after_message.thread_sequence is not None:
+                        queryset = queryset.filter(
+                            thread_sequence__gt=after_message.thread_sequence
+                        )
+                    else:
+                        queryset = queryset.filter(created_at__gt=after_message.created_at)
             page = self.paginate_queryset(queryset)
             if page is not None:
                 serializer = MessageSerializer(page, many=True)
@@ -175,6 +220,7 @@ class ConversationThreadViewSet(
             thread=thread,
             sender=request.user,
             body=serializer.validated_data["body"],
+            client_message_id=serializer.validated_data.get("client_message_id"),
         )
         return Response(MessageSerializer(message).data, status=201)
 

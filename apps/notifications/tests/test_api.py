@@ -12,6 +12,7 @@ from apps.notifications.models import (
     Message,
     Notification,
     NotificationPreference,
+    RealtimeOutboxEvent,
 )
 from apps.properties.choices import InquiryType, ListingType, PropertyStatus, PropertyType
 from apps.properties.models import Inquiry, Property
@@ -150,6 +151,10 @@ def test_inquiry_participant_can_create_thread_and_send_message(api_client, owne
         notification_type=NotificationType.NEW_MESSAGE,
         related_entity_id=message.id,
     ).exists()
+    assert RealtimeOutboxEvent.objects.filter(
+        event_type=RealtimeOutboxEvent.EventType.MESSAGE_CREATED,
+        aggregate_id=message.id,
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -277,6 +282,64 @@ def test_message_notifications_respect_recipient_preferences(
 
 
 @pytest.mark.django_db
+def test_message_send_is_idempotent_for_same_client_message_id(api_client, owner, buyer, inquiry):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    client_message_id = "9d38b97e-b41f-484c-a424-6c507fbb2057"
+
+    api_client.force_authenticate(buyer)
+    first = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Only once.", "client_message_id": client_message_id},
+        format="json",
+    )
+    second = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Only once.", "client_message_id": client_message_id},
+        format="json",
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.data["id"] == second.data["id"]
+    assert Message.objects.filter(thread=thread).count() == 1
+    assert Notification.objects.filter(
+        recipient=owner,
+        notification_type=NotificationType.NEW_MESSAGE,
+    ).count() == 1
+    assert AuditLog.objects.filter(actor=buyer, action="message.sent").count() == 1
+    assert RealtimeOutboxEvent.objects.filter(
+        event_type=RealtimeOutboxEvent.EventType.MESSAGE_CREATED
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_invalid_client_message_id_is_rejected(api_client, buyer, inquiry):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=inquiry.property_owner)
+
+    api_client.force_authenticate(buyer)
+    response = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Bad id.", "client_message_id": "not-a-uuid"},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert Message.objects.count() == 0
+
+
+@pytest.mark.django_db
 def test_message_create_rejects_empty_and_oversized_bodies(api_client, buyer, inquiry):
     thread = ConversationThread.objects.create(
         property=inquiry.property,
@@ -335,6 +398,32 @@ def test_thread_messages_are_paginated_and_unread_counts_are_tracked(
 
 
 @pytest.mark.django_db
+def test_thread_messages_support_after_cursor(api_client, owner, buyer, inquiry):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    from apps.notifications.services import create_message
+
+    first = create_message(thread=thread, sender=buyer, body="One")
+    second = create_message(thread=thread, sender=buyer, body="Two")
+    third = create_message(thread=thread, sender=owner, body="Three")
+
+    api_client.force_authenticate(owner)
+    response = api_client.get(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"after": str(first.id)},
+    )
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.data["results"]]
+    assert ids == [str(second.id), str(third.id)]
+
+
+@pytest.mark.django_db
 def test_message_send_and_mark_read_create_audit_events(api_client, owner, buyer, inquiry):
     thread = ConversationThread.objects.create(
         property=inquiry.property,
@@ -379,3 +468,137 @@ def test_transactional_email_provider_failure_does_not_raise(owner, monkeypatch)
     from apps.notifications.services import send_notification_email_now
 
     assert send_notification_email_now(notification_id=notification.id) is False
+
+
+@pytest.mark.django_db
+def test_transactional_email_task_can_raise_for_retry(owner, monkeypatch):
+    notification = Notification.objects.create(
+        recipient=owner,
+        notification_type=NotificationType.SYSTEM,
+        title="System notice",
+        body="A safe email body.",
+    )
+
+    class FailingProvider:
+        def send(self, message):
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        "apps.notifications.services.get_email_provider",
+        lambda: FailingProvider(),
+    )
+
+    from apps.notifications.services import send_notification_email_now
+
+    with pytest.raises(RuntimeError):
+        send_notification_email_now(notification_id=notification.id, raise_on_failure=True)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_realtime_outbox_failure_keeps_message_retryable(
+    api_client, owner, buyer, inquiry, monkeypatch
+):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+
+    queued = []
+    monkeypatch.setattr(
+        "apps.notifications.services.queue_realtime_outbox_processing",
+        lambda **kwargs: queued.append(kwargs) or True,
+    )
+
+    api_client.force_authenticate(buyer)
+    response = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Persist during Redis outage."},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    message = Message.objects.get(id=response.data["id"])
+    event = RealtimeOutboxEvent.objects.get(
+        event_type=RealtimeOutboxEvent.EventType.MESSAGE_CREATED,
+        aggregate_id=message.id,
+    )
+
+    def fail_publish(event):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr("apps.notifications.services.publish_realtime_outbox_event", fail_publish)
+
+    from apps.notifications.services import process_realtime_outbox_event_now
+
+    assert process_realtime_outbox_event_now(event_id=event.id) is False
+    event.refresh_from_db()
+    assert event.status == RealtimeOutboxEvent.Status.FAILED
+    assert event.attempt_count == 1
+    assert Message.objects.filter(id=message.id).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_realtime_outbox_retry_can_deliver_failed_event(
+    api_client, owner, buyer, inquiry, monkeypatch
+):
+    thread = ConversationThread.objects.create(
+        property=inquiry.property,
+        inquiry=inquiry,
+        created_by=buyer,
+    )
+    ConversationParticipant.objects.create(thread=thread, user=buyer)
+    ConversationParticipant.objects.create(thread=thread, user=owner)
+    monkeypatch.setattr(
+        "apps.notifications.services.queue_realtime_outbox_processing",
+        lambda **kwargs: True,
+    )
+    api_client.force_authenticate(buyer)
+    response = api_client.post(
+        reverse("conversation-threads-messages", args=[thread.id]),
+        {"body": "Retry me."},
+        format="json",
+    )
+    event = RealtimeOutboxEvent.objects.get(aggregate_id=response.data["id"])
+    event.status = RealtimeOutboxEvent.Status.FAILED
+    event.next_attempt_at = None
+    event.save(update_fields=["status", "next_attempt_at"])
+    delivered = []
+    monkeypatch.setattr(
+        "apps.notifications.services.publish_realtime_outbox_event",
+        lambda event: delivered.append(event.id),
+    )
+
+    from apps.notifications.services import process_due_realtime_outbox_events
+
+    assert process_due_realtime_outbox_events(limit=10) >= 1
+    event.refresh_from_db()
+    assert event.status == RealtimeOutboxEvent.Status.DELIVERED
+    assert event.id in delivered
+
+
+@pytest.mark.django_db
+def test_duplicate_thread_context_returns_existing_thread(api_client, owner, buyer, inquiry):
+    api_client.force_authenticate(buyer)
+    payload = {"property": str(inquiry.property_id), "inquiry": str(inquiry.id)}
+
+    first = api_client.post(reverse("conversation-threads-list"), payload, format="json")
+    second = api_client.post(reverse("conversation-threads-list"), payload, format="json")
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert first.data["id"] == second.data["id"]
+    assert ConversationThread.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_websocket_message_throttle_is_user_scoped(settings, buyer):
+    settings.WEBSOCKET_MESSAGE_RATE_LIMIT_COUNT = 1
+    settings.WEBSOCKET_MESSAGE_RATE_LIMIT_WINDOW_SECONDS = 60
+
+    from apps.notifications.throttling import websocket_message_send_allowed
+
+    assert websocket_message_send_allowed(buyer.id) == (True, 60)
+    assert websocket_message_send_allowed(buyer.id) == (False, 60)

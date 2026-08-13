@@ -5,12 +5,22 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
 from django.test import override_settings
+from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import User
 from apps.notifications.consumers import WEBSOCKET_SUBPROTOCOL
-from apps.notifications.models import ConversationParticipant, ConversationThread, Notification
-from apps.notifications.services import create_message, notification_group_name
+from apps.notifications.models import (
+    ConversationParticipant,
+    ConversationThread,
+    Message,
+    Notification,
+)
+from apps.notifications.services import (
+    create_message,
+    notification_group_name,
+    process_due_realtime_outbox_events,
+)
 from apps.properties.choices import InquiryType, ListingType, PropertyStatus, PropertyType
 from apps.properties.models import Inquiry, Property
 from config.asgi import application
@@ -87,11 +97,48 @@ async def test_thread_websocket_delivers_messages_to_participants(
         sender=buyer,
         body="Realtime hello.",
     )
+    await sync_to_async(process_due_realtime_outbox_events)(limit=10)
 
     event = await communicator.receive_json_from(timeout=2)
     assert event["type"] == "message.created"
     assert event["message"]["body"] == "Realtime hello."
     await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
+async def test_thread_websocket_accepts_subprotocol_token(websocket_users, websocket_thread):
+    owner, _, _ = websocket_users
+    token = await sync_to_async(_token_for)(owner)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{token}"],
+    )
+
+    connected, selected = await communicator.connect()
+
+    assert connected is True
+    assert selected == WEBSOCKET_SUBPROTOCOL
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE, WEBSOCKET_ALLOW_QUERY_TOKEN=False)
+async def test_thread_websocket_rejects_query_string_token(websocket_users, websocket_thread):
+    owner, _, _ = websocket_users
+    token = await sync_to_async(_token_for)(owner)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/?token={token}",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL],
+    )
+
+    connected, _ = await communicator.connect()
+
+    assert connected is False
 
 
 @pytest.mark.asyncio
@@ -107,6 +154,92 @@ async def test_thread_websocket_denies_non_participants(websocket_users, websock
     )
     connected, _ = await communicator.connect()
     assert connected is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE,
+    WEBSOCKET_MESSAGE_RATE_LIMIT_COUNT=1,
+    WEBSOCKET_MESSAGE_RATE_LIMIT_WINDOW_SECONDS=60,
+)
+async def test_thread_websocket_rate_limits_by_user(websocket_users, websocket_thread):
+    owner, buyer, _ = websocket_users
+    token = await sync_to_async(_token_for)(buyer)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{token}"],
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to(
+        {
+            "type": "message.send",
+            "body": "First.",
+            "client_message_id": "b82f650a-fcd1-4c79-b48b-e22ac2f26097",
+        }
+    )
+    accepted = await communicator.receive_json_from(timeout=2)
+    assert accepted["type"] == "message.accepted"
+
+    await communicator.send_json_to(
+        {
+            "type": "message.send",
+            "body": "Second.",
+            "client_message_id": "c57a7f12-00df-4ec2-9f11-af586d1b060f",
+        }
+    )
+    error = await communicator.receive_json_from(timeout=2)
+
+    assert error["type"] == "error"
+    assert error["code"] == "rate_limited"
+    assert await sync_to_async(Message.objects.filter(thread=websocket_thread).count)() == 1
+    assert await sync_to_async(
+        Message.objects.filter(thread=websocket_thread, sender=owner).exists
+    )() is False
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
+async def test_websocket_and_http_retry_share_client_message_id(
+    websocket_users, websocket_thread
+):
+    _, buyer, _ = websocket_users
+    client_message_id = "7de7e5a8-b2c0-45dc-9c43-d4a593bb3240"
+    token = await sync_to_async(_token_for)(buyer)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{token}"],
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to(
+        {
+            "type": "message.send",
+            "body": "Same logical message.",
+            "client_message_id": client_message_id,
+        }
+    )
+    accepted = await communicator.receive_json_from(timeout=2)
+    await communicator.disconnect()
+
+    api_client = APIClient()
+    api_client.force_authenticate(buyer)
+    response = await sync_to_async(api_client.post)(
+        f"/api/v1/messages/threads/{websocket_thread.id}/messages/",
+        {"body": "Same logical message.", "client_message_id": client_message_id},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["id"] == accepted["message_id"]
+    assert await sync_to_async(Message.objects.filter(thread=websocket_thread).count)() == 1
 
 
 @pytest.mark.asyncio

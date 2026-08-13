@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
+logger = logging.getLogger(__name__)
 
 
 class JwtAuthMiddleware:
@@ -17,14 +21,18 @@ class JwtAuthMiddleware:
 
     @database_sync_to_async
     def _resolve_user(self, scope):
-        token = _token_from_subprotocols(scope) or _token_from_query_string(scope)
+        token = _token_from_subprotocols(scope)
+        if not token and getattr(settings, "WEBSOCKET_ALLOW_QUERY_TOKEN", False):
+            token = _token_from_query_string(scope)
         if not token:
+            logger.info("websocket.auth.failed", extra={"reason": "missing_token"})
             return AnonymousUser()
         try:
             jwt_auth = JWTAuthentication()
             validated_token = jwt_auth.get_validated_token(token)
             return jwt_auth.get_user(validated_token)
         except Exception:
+            logger.info("websocket.auth.failed", extra={"reason": "invalid_token"})
             return AnonymousUser()
 
 

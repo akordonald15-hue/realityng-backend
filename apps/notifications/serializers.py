@@ -54,8 +54,24 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
-        fields = ["id", "thread", "sender", "body", "edited_at", "created_at"]
-        read_only_fields = ["id", "thread", "sender", "edited_at", "created_at"]
+        fields = [
+            "id",
+            "thread",
+            "sender",
+            "body",
+            "client_message_id",
+            "thread_sequence",
+            "edited_at",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "thread",
+            "sender",
+            "thread_sequence",
+            "edited_at",
+            "created_at",
+        ]
 
 
 class ConversationParticipantSerializer(serializers.ModelSerializer):
