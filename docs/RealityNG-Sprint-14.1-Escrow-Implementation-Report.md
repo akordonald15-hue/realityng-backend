@@ -79,17 +79,24 @@ RealityNG does not custody money in this implementation. Funding, release, refun
 - No live financial provider is configured.
 - Manual provider mode is implemented for controlled operations.
 - Sandbox adapter is a local abstraction, not a real external sandbox.
-- PostgreSQL validation still needs to be repeated in an isolated Compose stack before merge approval.
 - Dual approval threshold is planned but not fully enforced in this implementation pass.
-- Full-project pytest did not complete within the local Windows validation timeout; the changed payments surface passed.
+- PostgreSQL validation used an isolated local PostgreSQL 18 cluster because Docker Desktop was unavailable.
+- Redis was unavailable locally, so PostgreSQL regression tests used a temporary validation settings module with in-memory cache/channel layers.
 
 ## Validation Notes
 
 - Ruff: passed locally.
-- Django check: passed locally.
-- Makemigrations check: passed locally.
-- Clean migration: passed locally using disposable SQLite.
+- Django check: passed locally against PostgreSQL.
+- Makemigrations check: passed locally against PostgreSQL.
+- Clean migration: passed locally against PostgreSQL.
+- Upgrade migration from `payments.0001` to `payments.0002`: passed locally against PostgreSQL.
 - OpenAPI: 0 errors, 11 existing enum warnings remain.
-- Payments tests: 43 passed.
-- Direct service smoke: escrow create, funding, condition, release approval and confirmation passed.
-- Full backend suite: attempted locally, timed out before completion.
+- Payments tests: 47 passed on PostgreSQL.
+- Full backend suite: 344 passed on PostgreSQL.
+- Direct behavior smoke: webhook replay, uniqueness constraints, release/refund idempotency, row locking, large Decimal values, partial funding and provider confirmation transitions passed.
+
+## Defects Fixed During PostgreSQL Gate
+
+- Fixed a release/refund race where a refund request could be created after an active release request.
+- Fixed idempotent release/refund retries so the existing action is returned after escrow status changes.
+- Added regression tests for duplicate release/refund requests and conflicting active release/refund states.

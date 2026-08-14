@@ -225,6 +225,40 @@ def test_release_is_not_confirmed_until_provider_confirmation(escrow, owner, buy
     assert escrow.status == EscrowStatus.RELEASED
 
 
+def test_duplicate_release_request_returns_existing_after_status_changes(escrow, owner, buyer):
+    services.record_funding_event(
+        escrow=escrow,
+        actor=owner,
+        provider_event_id="evt-funded",
+        amount=Decimal("1000000.00"),
+        currency="NGN",
+    )
+
+    first = services.request_release(escrow=escrow, actor=buyer, idempotency_key="release-dup")
+    second = services.request_release(escrow=escrow, actor=buyer, idempotency_key="release-dup")
+
+    assert second.id == first.id
+
+
+def test_refund_cannot_be_requested_while_release_is_active(escrow, owner, buyer):
+    services.record_funding_event(
+        escrow=escrow,
+        actor=owner,
+        provider_event_id="evt-funded",
+        amount=Decimal("1000000.00"),
+        currency="NGN",
+    )
+    services.request_release(escrow=escrow, actor=buyer, idempotency_key="release-active")
+
+    with pytest.raises(ValidationError):
+        services.request_refund(
+            escrow=escrow,
+            actor=buyer,
+            reason="Conflicting refund.",
+            idempotency_key="refund-conflict",
+        )
+
+
 def test_open_dispute_blocks_release(escrow, owner, buyer):
     services.record_funding_event(
         escrow=escrow,
@@ -262,6 +296,50 @@ def test_refund_is_not_confirmed_until_provider_confirmation(escrow, owner, buye
     escrow.refresh_from_db()
     assert escrow.status == EscrowStatus.REFUNDED
     assert escrow.refund_status == EscrowRefundStatus.CONFIRMED
+
+
+def test_duplicate_refund_request_returns_existing_after_status_changes(escrow, owner, buyer):
+    services.record_funding_event(
+        escrow=escrow,
+        actor=owner,
+        provider_event_id="evt-funded",
+        amount=Decimal("1000000.00"),
+        currency="NGN",
+    )
+
+    first = services.request_refund(
+        escrow=escrow,
+        actor=buyer,
+        reason="Transaction cancelled.",
+        idempotency_key="refund-dup",
+    )
+    second = services.request_refund(
+        escrow=escrow,
+        actor=buyer,
+        reason="Transaction cancelled.",
+        idempotency_key="refund-dup",
+    )
+
+    assert second.id == first.id
+
+
+def test_release_cannot_be_requested_while_refund_is_active(escrow, owner, buyer):
+    services.record_funding_event(
+        escrow=escrow,
+        actor=owner,
+        provider_event_id="evt-funded",
+        amount=Decimal("1000000.00"),
+        currency="NGN",
+    )
+    services.request_refund(
+        escrow=escrow,
+        actor=buyer,
+        reason="Transaction cancelled.",
+        idempotency_key="refund-active",
+    )
+
+    with pytest.raises(ValidationError):
+        services.request_release(escrow=escrow, actor=buyer, idempotency_key="release-conflict")
 
 
 def test_reconciliation_mismatch_does_not_overwrite_escrow_state(escrow, owner):

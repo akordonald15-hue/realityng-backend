@@ -586,6 +586,27 @@ def _has_open_dispute(escrow: EscrowTransaction) -> bool:
     ).exists()
 
 
+ACTIVE_RELEASE_STATUSES = {
+    EscrowReleaseStatus.REQUESTED,
+    EscrowReleaseStatus.APPROVED,
+    EscrowReleaseStatus.SENT_TO_PROVIDER,
+}
+
+ACTIVE_REFUND_STATUSES = {
+    EscrowRefundStatus.REQUESTED,
+    EscrowRefundStatus.APPROVED,
+    EscrowRefundStatus.SENT_TO_PROVIDER,
+}
+
+
+def _has_active_release(escrow: EscrowTransaction) -> bool:
+    return escrow.releases.filter(status__in=ACTIVE_RELEASE_STATUSES).exists()
+
+
+def _has_active_refund(escrow: EscrowTransaction) -> bool:
+    return escrow.refunds.filter(status__in=ACTIVE_REFUND_STATUSES).exists()
+
+
 @db_transaction.atomic
 def request_release(
     *, escrow: EscrowTransaction, actor, amount=None, reason: str = "", idempotency_key: str = ""
@@ -596,6 +617,16 @@ def request_release(
         raise ValidationError("You are not allowed to request release for this escrow.")
     if _has_open_dispute(escrow):
         raise ValidationError("Escrow release is blocked while a dispute is open.")
+    idempotency_key = (idempotency_key or "").strip()
+    if idempotency_key:
+        existing = EscrowRelease.objects.filter(
+            escrow=escrow,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing:
+            return existing
+    if _has_active_refund(escrow):
+        raise ValidationError("Escrow release is blocked while a refund is active.")
     if escrow.status not in {
         EscrowStatus.FUNDED,
         EscrowStatus.CONDITIONS_PENDING,
@@ -607,13 +638,6 @@ def request_release(
     amount = _money(amount or escrow.confirmed_funded_amount)
     if amount <= 0 or amount > escrow.confirmed_funded_amount:
         raise ValidationError("Release amount must be funded and greater than zero.")
-    if idempotency_key:
-        existing = EscrowRelease.objects.filter(
-            escrow=escrow,
-            idempotency_key=idempotency_key,
-        ).first()
-        if existing:
-            return existing
     release = EscrowRelease.objects.create(
         escrow=escrow,
         amount=amount,
@@ -716,9 +740,7 @@ def request_refund(
         raise ValidationError("You are not allowed to request refund for this escrow.")
     if not reason.strip():
         raise ValidationError("Refund reason is required.")
-    amount = _money(amount or escrow.confirmed_funded_amount)
-    if amount <= 0 or amount > escrow.confirmed_funded_amount:
-        raise ValidationError("Refund amount must be funded and greater than zero.")
+    idempotency_key = (idempotency_key or "").strip()
     if idempotency_key:
         existing = EscrowRefund.objects.filter(
             escrow=escrow,
@@ -726,6 +748,17 @@ def request_refund(
         ).first()
         if existing:
             return existing
+    if _has_active_release(escrow):
+        raise ValidationError("Escrow refund is blocked while a release is active.")
+    if escrow.status not in {
+        EscrowStatus.PARTIALLY_FUNDED,
+        EscrowStatus.FUNDED,
+        EscrowStatus.DISPUTED,
+    }:
+        raise ValidationError("Escrow is not eligible for refund request.")
+    amount = _money(amount or escrow.confirmed_funded_amount)
+    if amount <= 0 or amount > escrow.confirmed_funded_amount:
+        raise ValidationError("Refund amount must be funded and greater than zero.")
     refund = EscrowRefund.objects.create(
         escrow=escrow,
         amount=amount,
