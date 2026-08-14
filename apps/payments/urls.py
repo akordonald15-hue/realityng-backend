@@ -1,6 +1,9 @@
 from rest_framework.routers import DefaultRouter
 
 from apps.payments.views import (
+    EscrowProviderViewSet,
+    EscrowTransactionViewSet,
+    EscrowWebhookViewSet,
     PaymentDisputeViewSet,
     PaymentMilestoneViewSet,
     PaymentProofViewSet,
@@ -12,5 +15,8 @@ router.register("transactions", TransactionViewSet, basename="transaction")
 router.register("payment-milestones", PaymentMilestoneViewSet, basename="payment-milestone")
 router.register("payment-proofs", PaymentProofViewSet, basename="payment-proof")
 router.register("payment-disputes", PaymentDisputeViewSet, basename="payment-dispute")
+router.register("escrow-providers", EscrowProviderViewSet, basename="escrow-provider")
+router.register("payment-escrows", EscrowTransactionViewSet, basename="payment-escrow")
+router.register("escrow-webhooks", EscrowWebhookViewSet, basename="escrow-webhook")
 
 urlpatterns = router.urls

@@ -102,6 +102,7 @@ class PropertyAssignmentStatus(models.TextChoices):
 
 class PropertyAssignmentCapability(models.TextChoices):
     MANAGE_LISTING = "manage_listing", "Manage Listing"
+    MANAGE_TRANSACTIONS = "manage_transactions", "Manage Transactions"
     MANAGE_LEADS = "manage_leads", "Manage Leads"
     MANAGE_WALKTHROUGHS = "manage_walkthroughs", "Manage Walkthroughs"
     MANAGE_VIEWINGS = "manage_viewings", "Manage Viewings"

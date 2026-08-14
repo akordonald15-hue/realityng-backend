@@ -61,6 +61,25 @@ class IsProofParticipantOrAdmin(BasePermission):
         )
 
 
+class IsEscrowParticipantOrAdmin(BasePermission):
+    """Buyer, owner, admin, or explicitly transaction-authorized assignee."""
+
+    message = "You are not a participant in this escrow transaction."
+
+    def has_object_permission(self, request, view, obj) -> bool:
+        transaction = obj.transaction
+        return (
+            transaction.buyer_id == request.user.id
+            or transaction.owner_id == request.user.id
+            or user_is_admin(request.user)
+            or user_has_property_capability(
+                request.user,
+                transaction.property,
+                PropertyAssignmentCapability.MANAGE_TRANSACTIONS,
+            )
+        )
+
+
 class IsReviewerOrAdmin(BasePermission):
     """Only the property owner (reviewing proof of payment) or an admin may
     accept, reject, or start review on a milestone -- the buyer who

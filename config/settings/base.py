@@ -208,6 +208,18 @@ REST_FRAMEWORK = {
             "DRF_THROTTLE_PAYMENT_SIGNED_URL_RATE",
             default="120/hour",
         ),
+        "escrow_create": env("DRF_THROTTLE_ESCROW_CREATE_RATE", default="10/hour"),
+        "escrow_release_request": env(
+            "DRF_THROTTLE_ESCROW_RELEASE_REQUEST_RATE",
+            default="20/hour",
+        ),
+        "escrow_refund_request": env(
+            "DRF_THROTTLE_ESCROW_REFUND_REQUEST_RATE",
+            default="20/hour",
+        ),
+        "escrow_admin_action": env("DRF_THROTTLE_ESCROW_ADMIN_ACTION_RATE", default="120/hour"),
+        "escrow_reconcile": env("DRF_THROTTLE_ESCROW_RECONCILE_RATE", default="60/hour"),
+        "escrow_webhook": env("DRF_THROTTLE_ESCROW_WEBHOOK_RATE", default="600/hour"),
         "notification_write": env("DRF_THROTTLE_NOTIFICATION_WRITE_RATE", default="120/hour"),
         "message_thread_create": env("DRF_THROTTLE_MESSAGE_THREAD_CREATE_RATE", default="30/hour"),
         "message_send": env("DRF_THROTTLE_MESSAGE_SEND_RATE", default="120/hour"),
