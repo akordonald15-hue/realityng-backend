@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from rest_framework import mixins, status, viewsets
@@ -25,6 +26,10 @@ from apps.payments.models import (
     EscrowRefund,
     EscrowRelease,
     EscrowTransaction,
+    FinancingApplication,
+    FinancingDocument,
+    FinancingOffer,
+    FinancingProduct,
     PaymentDispute,
     PaymentMilestone,
     PaymentProof,
@@ -60,6 +65,20 @@ from apps.payments.serializers import (
     EscrowSettlementRecordSerializer,
     EscrowSettlementSerializer,
     EscrowTransactionSerializer,
+    FinancingAdminDecisionSerializer,
+    FinancingApplicationAdminSerializer,
+    FinancingApplicationCreateSerializer,
+    FinancingApplicationSerializer,
+    FinancingApplicationSubmitSerializer,
+    FinancingApplicationUpdateSerializer,
+    FinancingConsentCreateSerializer,
+    FinancingDocumentSerializer,
+    FinancingDocumentUploadSerializer,
+    FinancingOfferCreateSerializer,
+    FinancingOfferSerializer,
+    FinancingPartnerSubmissionSerializer,
+    FinancingPartnerSubmitSerializer,
+    FinancingProductSerializer,
     MilestoneCreateSerializer,
     PaymentDisputeSerializer,
     PaymentMilestoneSerializer,
@@ -835,3 +854,318 @@ class EscrowWebhookViewSet(ActionScopedThrottleMixin, viewsets.GenericViewSet):
         if event.signature_status == "invalid":
             return Response({"detail": "Invalid provider webhook signature."}, status=400)
         return Response(ProviderWebhookEventSerializer(event).data, status=status.HTTP_202_ACCEPTED)
+
+
+class FinancingProductViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = FinancingProductSerializer
+    permission_classes = [AllowAny]
+    search_fields = ["name", "partner__name", "description"]
+    filterset_fields = ["product_type", "currency", "partner__slug"]
+
+    def get_queryset(self):
+        return FinancingProduct.objects.select_related("partner").prefetch_related(
+            "document_requirements"
+        ).filter(status="active", partner__status="active")
+
+
+class FinancingApplicationViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+    throttle_scope_by_action = {
+        "create": "financing_application_create",
+        "documents": "financing_document_upload",
+    }
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return FinancingApplicationCreateSerializer
+        if self.action == "partial_update":
+            return FinancingApplicationUpdateSerializer
+        if self.action == "consent":
+            return FinancingConsentCreateSerializer
+        if self.action == "documents":
+            return FinancingDocumentUploadSerializer
+        if self.action == "submit":
+            return FinancingApplicationSubmitSerializer
+        return FinancingApplicationSerializer
+
+    def get_queryset(self):
+        queryset = FinancingApplication.objects.select_related(
+            "applicant",
+            "property",
+            "transaction",
+            "product__partner",
+            "partner",
+        ).prefetch_related("documents", "offers__partner", "timeline_events")
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
+        if user_is_admin(self.request.user):
+            return queryset
+        return queryset.filter(applicant=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            application = services.create_financing_application(
+                applicant=request.user,
+                product=serializer.context["product"],
+                prop=serializer.context.get("property"),
+                transaction=serializer.context.get("transaction"),
+                requested_amount=serializer.validated_data["requested_amount"],
+                currency=serializer.validated_data.get("currency", "NGN"),
+                purpose=serializer.validated_data["purpose"],
+                preferred_tenor_months=serializer.validated_data["preferred_tenor_months"],
+                employment_status=serializer.validated_data["employment_status"],
+                monthly_income_band=serializer.validated_data["monthly_income_band"],
+                state=serializer.validated_data["state"],
+                city=serializer.validated_data.get("city", ""),
+                applicant_message=serializer.validated_data.get("applicant_message", ""),
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingApplicationSerializer(application, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        application = self.get_object()
+        serializer = self.get_serializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            application = services.update_financing_application(
+                application=application,
+                actor=request.user,
+                **serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingApplicationSerializer(application, context={"request": request}).data
+        )
+
+    @action(detail=False, methods=["get"], url_path="my")
+    def my(self, request):
+        serializer = FinancingApplicationSerializer(
+            self.get_queryset().filter(applicant=request.user),
+            many=True,
+            context={"request": request},
+        )
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="consent")
+    def consent(self, request, pk=None):
+        application = self.get_object()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            services.grant_financing_consent(
+                application=application,
+                actor=request.user,
+                scope=serializer.validated_data.get("scope", "financing_partner_submission"),
+                accepted_terms_version=serializer.validated_data.get(
+                    "accepted_terms_version",
+                    settings.FINANCING_CONSENT_TERMS_VERSION,
+                ),
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        application.refresh_from_db()
+        return Response(
+            FinancingApplicationSerializer(application, context={"request": request}).data
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="documents",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def documents(self, request, pk=None):
+        application = self.get_object()
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request, "application": application},
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            document = services.upload_financing_document(
+                application=application,
+                actor=request.user,
+                serializer=serializer,
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingDocumentSerializer(document).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="submit")
+    def submit(self, request, pk=None):
+        application = self.get_object()
+        try:
+            application = services.submit_financing_application(
+                application=application,
+                actor=request.user,
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingApplicationSerializer(application, context={"request": request}).data
+        )
+
+    @action(detail=True, methods=["get"], url_path="offers")
+    def offers(self, request, pk=None):
+        application = self.get_object()
+        serializer = FinancingOfferSerializer(
+            application.offers.select_related("partner"),
+            many=True,
+        )
+        return Response(serializer.data)
+
+
+class FinancingDocumentViewSet(ActionScopedThrottleMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = FinancingDocumentSerializer
+    permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {"signed_url": "financing_signed_url"}
+
+    def get_queryset(self):
+        queryset = FinancingDocument.objects.select_related("application", "uploaded_by")
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
+        if user_is_admin(self.request.user):
+            return queryset
+        return queryset.filter(application__applicant=self.request.user)
+
+    @action(detail=True, methods=["get"], url_path="signed-url")
+    def signed_url(self, request, pk=None):
+        document = self.get_object()
+        return Response({"url": document.file.url})
+
+
+class FinancingOfferViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = FinancingOfferSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = FinancingOffer.objects.select_related("application", "partner")
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
+        if user_is_admin(self.request.user):
+            return queryset
+        return queryset.filter(application__applicant=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="accept")
+    def accept(self, request, pk=None):
+        offer = self.get_object()
+        try:
+            offer = services.accept_financing_offer(offer=offer, actor=request.user)
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(FinancingOfferSerializer(offer).data)
+
+    @action(detail=True, methods=["post"], url_path="decline")
+    def decline(self, request, pk=None):
+        offer = self.get_object()
+        try:
+            offer = services.decline_financing_offer(offer=offer, actor=request.user)
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(FinancingOfferSerializer(offer).data)
+
+
+class AdminFinancingApplicationViewSet(ActionScopedThrottleMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = FinancingApplicationAdminSerializer
+    permission_classes = [IsAuthenticated]
+    throttle_scope_by_action = {
+        "decision": "financing_admin_action",
+        "submit_to_partner": "financing_admin_action",
+        "record_offer": "financing_admin_action",
+    }
+    search_fields = [
+        "application_reference",
+        "applicant__email",
+        "partner__name",
+        "property__title",
+    ]
+    filterset_fields = ["status", "partner", "product", "state", "city"]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not user_is_admin(request.user):
+            self.permission_denied(request, message="Admin access is required.")
+
+    def get_queryset(self):
+        queryset = FinancingApplication.objects.select_related(
+            "applicant",
+            "property",
+            "transaction",
+            "product__partner",
+            "partner",
+        ).prefetch_related(
+            "documents",
+            "offers__partner",
+            "partner_submissions",
+            "timeline_events",
+        )
+        if getattr(self, "swagger_fake_view", False) or not user_is_admin(self.request.user):
+            return queryset.none()
+        return queryset
+
+    @action(detail=True, methods=["post"], url_path="decision")
+    def decision(self, request, pk=None):
+        application = self.get_object()
+        serializer = FinancingAdminDecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            application = services.admin_transition_financing_application(
+                application=application,
+                actor=request.user,
+                status=serializer.validated_data["status"],
+                message=serializer.validated_data.get("message", ""),
+                admin_notes=serializer.validated_data.get("admin_notes", ""),
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingApplicationAdminSerializer(application, context={"request": request}).data
+        )
+
+    @action(detail=True, methods=["post"], url_path="submit-to-partner")
+    def submit_to_partner(self, request, pk=None):
+        application = self.get_object()
+        serializer = FinancingPartnerSubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            submission = services.submit_financing_to_partner(
+                application=application,
+                actor=request.user,
+                submission_reference=serializer.validated_data["submission_reference"],
+                payload_hash=serializer.validated_data.get("payload_hash", ""),
+                message=serializer.validated_data.get("message", ""),
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(
+            FinancingPartnerSubmissionSerializer(submission).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="record-offer")
+    def record_offer(self, request, pk=None):
+        application = self.get_object()
+        serializer = FinancingOfferCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            offer = services.create_financing_offer(
+                application=application,
+                actor=request.user,
+                **serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            return _error(exc)
+        return Response(FinancingOfferSerializer(offer).data, status=status.HTTP_201_CREATED)

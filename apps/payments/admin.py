@@ -10,6 +10,15 @@ from apps.payments.models import (
     EscrowSettlement,
     EscrowSettlementAllocation,
     EscrowTransaction,
+    FinancingApplication,
+    FinancingConsent,
+    FinancingDocument,
+    FinancingDocumentRequirement,
+    FinancingOffer,
+    FinancingPartner,
+    FinancingPartnerSubmission,
+    FinancingProduct,
+    FinancingTimelineEvent,
     PaymentDispute,
     PaymentMilestone,
     PaymentProof,
@@ -122,3 +131,67 @@ class EscrowReconciliationRecordAdmin(admin.ModelAdmin):
     list_display = ["id", "escrow", "status", "expected_amount", "provider_amount", "checked_at"]
     list_filter = ["status"]
     search_fields = ["id", "escrow__id"]
+
+
+@admin.register(FinancingPartner)
+class FinancingPartnerAdmin(admin.ModelAdmin):
+    list_display = ["name", "slug", "status", "partner_type", "integration_mode"]
+    list_filter = ["status", "partner_type", "integration_mode"]
+    search_fields = ["name", "slug"]
+
+
+@admin.register(FinancingProduct)
+class FinancingProductAdmin(admin.ModelAdmin):
+    list_display = ["name", "partner", "product_type", "status", "currency"]
+    list_filter = ["status", "product_type", "currency", "partner"]
+    search_fields = ["name", "partner__name"]
+
+
+@admin.register(FinancingDocumentRequirement)
+class FinancingDocumentRequirementAdmin(admin.ModelAdmin):
+    list_display = ["product", "document_type", "required", "max_size_mb"]
+    list_filter = ["document_type", "required"]
+
+
+@admin.register(FinancingApplication)
+class FinancingApplicationAdmin(admin.ModelAdmin):
+    list_display = [
+        "application_reference", "applicant", "partner", "product", "status",
+        "requested_amount", "currency", "created_at",
+    ]
+    list_filter = ["status", "partner", "product", "currency", "state"]
+    search_fields = ["application_reference", "applicant__email", "property__title"]
+
+
+@admin.register(FinancingConsent)
+class FinancingConsentAdmin(admin.ModelAdmin):
+    list_display = ["application", "applicant", "scope", "accepted_terms_version", "consented_at"]
+    search_fields = ["application__application_reference", "applicant__email"]
+
+
+@admin.register(FinancingDocument)
+class FinancingDocumentAdmin(admin.ModelAdmin):
+    list_display = ["application", "document_type", "uploaded_by", "status", "created_at"]
+    list_filter = ["document_type", "status"]
+    search_fields = ["application__application_reference", "original_filename", "checksum"]
+
+
+@admin.register(FinancingPartnerSubmission)
+class FinancingPartnerSubmissionAdmin(admin.ModelAdmin):
+    list_display = ["application", "partner", "submission_reference", "status", "submitted_at"]
+    list_filter = ["status", "partner"]
+    search_fields = ["application__application_reference", "submission_reference"]
+
+
+@admin.register(FinancingOffer)
+class FinancingOfferAdmin(admin.ModelAdmin):
+    list_display = ["application", "partner", "offer_reference", "status", "approved_amount"]
+    list_filter = ["status", "partner", "currency"]
+    search_fields = ["application__application_reference", "offer_reference"]
+
+
+@admin.register(FinancingTimelineEvent)
+class FinancingTimelineEventAdmin(admin.ModelAdmin):
+    list_display = ["application", "event_type", "visibility", "created_at"]
+    list_filter = ["event_type", "visibility"]
+    search_fields = ["application__application_reference", "message"]

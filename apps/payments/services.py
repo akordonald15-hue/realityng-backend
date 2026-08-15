@@ -16,6 +16,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 
 from apps.accounts.services import create_audit_log, user_is_admin
 from apps.inspections.choices import InspectionRequestStatus
@@ -36,6 +37,12 @@ from apps.payments.choices import (
     EscrowRefundStatus,
     EscrowReleaseStatus,
     EscrowStatus,
+    FinancingApplicationStatus,
+    FinancingConsentStatus,
+    FinancingDocumentStatus,
+    FinancingOfferStatus,
+    FinancingPartnerSubmissionStatus,
+    FinancingTimelineVisibility,
     MilestoneStatus,
     ProviderWebhookProcessingStatus,
     ProviderWebhookSignatureStatus,
@@ -52,6 +59,12 @@ from apps.payments.models import (
     EscrowSettlement,
     EscrowSettlementAllocation,
     EscrowTransaction,
+    FinancingApplication,
+    FinancingConsent,
+    FinancingDocument,
+    FinancingDocumentRequirement,
+    FinancingOffer,
+    FinancingPartnerSubmission,
     PaymentDispute,
     PaymentMilestone,
     PaymentProof,
@@ -990,3 +1003,455 @@ def _notify_participants(escrow: EscrowTransaction, *, title: str, body: str, ac
             action_url=f"/dashboard/transactions/{escrow.transaction_id}/escrow",
             force=True,
         )
+
+
+def create_financing_reference() -> str:
+    return f"FIN-{timezone.now():%Y%m%d}-{get_random_string(8).upper()}"
+
+
+def _create_financing_timeline(
+    *,
+    application: FinancingApplication,
+    actor,
+    event_type: str,
+    message: str,
+    visibility: str = FinancingTimelineVisibility.APPLICANT,
+    metadata: dict | None = None,
+):
+    from apps.payments.models import FinancingTimelineEvent
+
+    return FinancingTimelineEvent.objects.create(
+        application=application,
+        actor=actor if getattr(actor, "is_authenticated", False) else None,
+        event_type=event_type,
+        message=message,
+        visibility=visibility,
+        metadata=metadata or {},
+    )
+
+
+def can_view_financing_application(user, application: FinancingApplication) -> bool:
+    return bool(user_is_admin(user) or application.applicant_id == user.id)
+
+
+def can_admin_financing(user) -> bool:
+    return user_is_admin(user)
+
+
+@db_transaction.atomic
+def create_financing_application(
+    *,
+    applicant,
+    product,
+    requested_amount,
+    purpose: str,
+    preferred_tenor_months: int,
+    employment_status: str,
+    monthly_income_band: str,
+    state: str,
+    city: str = "",
+    prop=None,
+    transaction: Transaction | None = None,
+    currency: str = "NGN",
+    applicant_message: str = "",
+) -> FinancingApplication:
+    if transaction and transaction.buyer_id != applicant.id:
+        raise ValidationError("Transaction is not available.")
+    if transaction and prop and transaction.property_id != prop.id:
+        raise ValidationError("Transaction must belong to the selected property.")
+    application = FinancingApplication.objects.create(
+        applicant=applicant,
+        property=prop or (transaction.property if transaction else None),
+        transaction=transaction,
+        product=product,
+        partner=product.partner,
+        application_reference=create_financing_reference(),
+        requested_amount=_money(requested_amount),
+        currency=currency.upper(),
+        purpose=purpose,
+        preferred_tenor_months=preferred_tenor_months,
+        employment_status=employment_status,
+        monthly_income_band=monthly_income_band,
+        state=state,
+        city=city,
+        applicant_message=applicant_message,
+    )
+    _create_financing_timeline(
+        application=application,
+        actor=applicant,
+        event_type="financing_application_created",
+        message="Financing application draft created.",
+    )
+    create_audit_log(
+        applicant,
+        "financing_application_created",
+        application,
+        metadata={"product_id": str(product.id), "partner_id": str(product.partner_id)},
+    )
+    return application
+
+
+@db_transaction.atomic
+def update_financing_application(
+    *, application: FinancingApplication, actor, **attrs
+) -> FinancingApplication:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot edit this financing application.")
+    if application.status not in {
+        FinancingApplicationStatus.DRAFT,
+        FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+    }:
+        raise ValidationError("This financing application cannot be edited.")
+    for field, value in attrs.items():
+        if value is not None:
+            setattr(application, field, value)
+    application.save(update_fields=[*attrs.keys(), "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_application_updated",
+        message="Financing application updated.",
+    )
+    create_audit_log(actor, "financing_application_updated", application, metadata={})
+    return application
+
+
+@db_transaction.atomic
+def grant_financing_consent(
+    *,
+    application: FinancingApplication,
+    actor,
+    scope: str,
+    accepted_terms_version: str,
+    ip_address: str | None = None,
+    user_agent: str = "",
+) -> FinancingConsent:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot consent for this financing application.")
+    consent = FinancingConsent.objects.create(
+        application=application,
+        applicant=actor,
+        scope=scope,
+        accepted_terms_version=accepted_terms_version,
+        consented_at=timezone.now(),
+        ip_address=ip_address,
+        user_agent=user_agent[:255],
+    )
+    application.consent_status = FinancingConsentStatus.GRANTED
+    application.save(update_fields=["consent_status", "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_consent_granted",
+        message="Applicant consented to share application data with financing partners.",
+    )
+    create_audit_log(actor, "financing_consent_granted", consent, metadata={"scope": scope})
+    return consent
+
+
+def _required_financing_document_types(application: FinancingApplication) -> set[str]:
+    explicit = set(
+        FinancingDocumentRequirement.objects.filter(
+            product=application.product,
+            required=True,
+        ).values_list("document_type", flat=True)
+    )
+    if explicit:
+        return explicit
+    required = {"identity"}
+    if application.product.requires_income_documents:
+        required.add("income_proof")
+    if application.product.requires_bank_statement:
+        required.add("bank_statement")
+    return required
+
+
+def validate_financing_submission(application: FinancingApplication) -> None:
+    if application.consent_status != FinancingConsentStatus.GRANTED:
+        raise ValidationError("Applicant consent is required before submission.")
+    required = _required_financing_document_types(application)
+    uploaded = set(
+        application.documents.filter(
+            status__in=[
+                FinancingDocumentStatus.UPLOADED,
+                FinancingDocumentStatus.UNDER_REVIEW,
+                FinancingDocumentStatus.ACCEPTED,
+            ]
+        ).values_list("document_type", flat=True)
+    )
+    missing = sorted(required - uploaded)
+    if missing:
+        raise ValidationError(
+            {"documents": f"Missing required documents: {', '.join(missing)}."}
+        )
+
+
+@db_transaction.atomic
+def submit_financing_application(
+    *, application: FinancingApplication, actor
+) -> FinancingApplication:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot submit this financing application.")
+    if application.status not in {
+        FinancingApplicationStatus.DRAFT,
+        FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+    }:
+        raise ValidationError("This financing application cannot be submitted.")
+    validate_financing_submission(application)
+    application.status = FinancingApplicationStatus.SUBMITTED
+    application.submitted_at = timezone.now()
+    application.save(update_fields=["status", "submitted_at", "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_application_submitted",
+        message="Financing application submitted for RealityNG review.",
+    )
+    create_audit_log(actor, "financing_application_submitted", application, metadata={})
+    return application
+
+
+@db_transaction.atomic
+def upload_financing_document(
+    *, application: FinancingApplication, actor, serializer
+) -> FinancingDocument:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot upload documents for this application.")
+    if application.status not in {
+        FinancingApplicationStatus.DRAFT,
+        FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+        FinancingApplicationStatus.SUBMITTED,
+    }:
+        raise ValidationError("Documents cannot be uploaded for this application status.")
+    document = serializer.save()
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_document_uploaded",
+        message=f"{document.get_document_type_display()} document uploaded.",
+    )
+    create_audit_log(
+        actor,
+        "financing_document_uploaded",
+        document,
+        metadata={"application_id": str(application.id), "document_type": document.document_type},
+    )
+    return document
+
+
+@db_transaction.atomic
+def admin_transition_financing_application(
+    *,
+    application: FinancingApplication,
+    actor,
+    status: str,
+    message: str = "",
+    admin_notes: str = "",
+) -> FinancingApplication:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if not can_admin_financing(actor):
+        raise ValidationError("Only admins can review financing applications.")
+    if status != application.status and not application.can_transition_to(status):
+        raise ValidationError(f"Application cannot move from {application.status} to {status}.")
+    application.status = status
+    if admin_notes:
+        application.admin_notes = admin_notes
+    if status in {
+        FinancingApplicationStatus.REJECTED,
+        FinancingApplicationStatus.CANCELLED,
+        FinancingApplicationStatus.EXPIRED,
+    }:
+        application.decision_at = timezone.now()
+    application.save(update_fields=["status", "admin_notes", "decision_at", "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type=f"financing_application_{status}",
+        message=message or f"Application moved to {status}.",
+        visibility=(
+            FinancingTimelineVisibility.APPLICANT
+            if status != FinancingApplicationStatus.UNDER_REVIEW
+            else FinancingTimelineVisibility.INTERNAL
+        ),
+    )
+    create_audit_log(
+        actor,
+        "financing_application_status_changed",
+        application,
+        metadata={"status": status},
+    )
+    return application
+
+
+@db_transaction.atomic
+def submit_financing_to_partner(
+    *,
+    application: FinancingApplication,
+    actor,
+    submission_reference: str,
+    payload_hash: str = "",
+    message: str = "",
+) -> FinancingPartnerSubmission:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if not can_admin_financing(actor):
+        raise ValidationError("Only admins can submit financing applications to partners.")
+    if application.consent_status != FinancingConsentStatus.GRANTED:
+        raise ValidationError("Applicant consent is required before partner submission.")
+    if application.status not in {
+        FinancingApplicationStatus.SUBMITTED,
+        FinancingApplicationStatus.UNDER_REVIEW,
+        FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+    }:
+        raise ValidationError("Application is not ready for partner submission.")
+    existing = application.partner_submissions.filter(
+        partner=application.partner,
+        submission_reference=submission_reference,
+    ).first()
+    if existing:
+        return existing
+    submission = FinancingPartnerSubmission.objects.create(
+        application=application,
+        partner=application.partner,
+        submission_reference=submission_reference,
+        status=FinancingPartnerSubmissionStatus.SUBMITTED,
+        submitted_at=timezone.now(),
+        payload_hash=payload_hash,
+    )
+    application.status = FinancingApplicationStatus.PARTNER_REVIEW
+    application.partner_submitted_at = submission.submitted_at
+    application.partner_reference = submission_reference
+    application.partner_status = "submitted"
+    application.save(
+        update_fields=[
+            "status", "partner_submitted_at", "partner_reference", "partner_status", "updated_at",
+        ]
+    )
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_partner_submission_created",
+        message=message or "Application submitted to financing partner.",
+    )
+    create_audit_log(
+        actor,
+        "financing_partner_submission_created",
+        submission,
+        metadata={"application_id": str(application.id)},
+    )
+    return submission
+
+
+@db_transaction.atomic
+def create_financing_offer(
+    *,
+    application: FinancingApplication,
+    actor,
+    offer_reference: str,
+    approved_amount,
+    currency: str,
+    tenor_months: int,
+    interest_rate_display: str = "",
+    fees_display: str = "",
+    monthly_payment_display: str = "",
+    partner_terms_summary: str = "",
+    expires_at=None,
+) -> FinancingOffer:
+    application = FinancingApplication.objects.select_for_update().get(id=application.id)
+    if not can_admin_financing(actor):
+        raise ValidationError("Only admins can record partner offers.")
+    if application.status != FinancingApplicationStatus.PARTNER_REVIEW:
+        raise ValidationError("Offers can only be recorded while partner review is active.")
+    offer = FinancingOffer.objects.create(
+        application=application,
+        partner=application.partner,
+        offer_reference=offer_reference,
+        status=FinancingOfferStatus.ACTIVE,
+        approved_amount=_money(approved_amount),
+        currency=currency.upper(),
+        tenor_months=tenor_months,
+        interest_rate_display=interest_rate_display,
+        fees_display=fees_display,
+        monthly_payment_display=monthly_payment_display,
+        partner_terms_summary=partner_terms_summary,
+        expires_at=expires_at,
+    )
+    application.status = FinancingApplicationStatus.OFFER_RECEIVED
+    application.partner_status = "offer_received"
+    application.decision_at = timezone.now()
+    application.save(update_fields=["status", "partner_status", "decision_at", "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_offer_received",
+        message="A financing partner offer has been recorded.",
+    )
+    create_audit_log(actor, "financing_offer_received", offer, metadata={})
+    return offer
+
+
+@db_transaction.atomic
+def accept_financing_offer(*, offer: FinancingOffer, actor) -> FinancingOffer:
+    offer = FinancingOffer.objects.select_for_update().select_related("application").get(
+        id=offer.id
+    )
+    application = FinancingApplication.objects.select_for_update().get(id=offer.application_id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot accept this offer.")
+    if offer.status != FinancingOfferStatus.ACTIVE:
+        raise ValidationError("This offer is not active.")
+    if application.status != FinancingApplicationStatus.OFFER_RECEIVED:
+        raise ValidationError("Application is not ready for offer acceptance.")
+    offer.status = FinancingOfferStatus.ACCEPTED
+    offer.accepted_at = timezone.now()
+    offer.save(update_fields=["status", "accepted_at", "updated_at"])
+    application.status = FinancingApplicationStatus.OFFER_ACCEPTED
+    application.partner_status = "offer_accepted"
+    application.save(update_fields=["status", "partner_status", "updated_at"])
+    application.offers.exclude(id=offer.id).filter(status=FinancingOfferStatus.ACTIVE).update(
+        status=FinancingOfferStatus.WITHDRAWN,
+        updated_at=timezone.now(),
+    )
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_offer_accepted",
+        message="Applicant accepted the partner financing offer.",
+    )
+    create_audit_log(actor, "financing_offer_accepted", offer, metadata={})
+    return offer
+
+
+@db_transaction.atomic
+def decline_financing_offer(*, offer: FinancingOffer, actor) -> FinancingOffer:
+    offer = FinancingOffer.objects.select_for_update().select_related("application").get(
+        id=offer.id
+    )
+    application = FinancingApplication.objects.select_for_update().get(id=offer.application_id)
+    if application.applicant_id != actor.id:
+        raise ValidationError("You cannot decline this offer.")
+    if offer.status != FinancingOfferStatus.ACTIVE:
+        raise ValidationError("This offer is not active.")
+    offer.status = FinancingOfferStatus.DECLINED
+    offer.declined_at = timezone.now()
+    offer.save(update_fields=["status", "declined_at", "updated_at"])
+    has_active_offer = (
+        application.offers.filter(status=FinancingOfferStatus.ACTIVE)
+        .exclude(id=offer.id)
+        .exists()
+    )
+    if not has_active_offer:
+        application.status = FinancingApplicationStatus.OFFER_DECLINED
+        application.partner_status = "offer_declined"
+        application.save(update_fields=["status", "partner_status", "updated_at"])
+    _create_financing_timeline(
+        application=application,
+        actor=actor,
+        event_type="financing_offer_declined",
+        message="Applicant declined a partner financing offer.",
+    )
+    create_audit_log(actor, "financing_offer_declined", offer, metadata={})
+    return offer

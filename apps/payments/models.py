@@ -21,13 +21,25 @@ from apps.payments.choices import (
     EscrowRefundStatus,
     EscrowReleaseStatus,
     EscrowStatus,
+    FinancingApplicationStatus,
+    FinancingConsentStatus,
+    FinancingDocumentStatus,
+    FinancingDocumentType,
+    FinancingIntegrationMode,
+    FinancingOfferStatus,
+    FinancingPartnerStatus,
+    FinancingPartnerSubmissionStatus,
+    FinancingPartnerType,
+    FinancingProductStatus,
+    FinancingProductType,
+    FinancingTimelineVisibility,
     MilestoneStatus,
     ProviderWebhookProcessingStatus,
     ProviderWebhookSignatureStatus,
     TransactionStatus,
 )
-from apps.payments.storage import get_payment_proof_storage
-from apps.payments.validators import validate_payment_proof
+from apps.payments.storage import get_financing_document_storage, get_payment_proof_storage
+from apps.payments.validators import validate_financing_document, validate_payment_proof
 
 
 class Transaction(BaseModel):
@@ -833,4 +845,456 @@ class EscrowReconciliationRecord(BaseModel):
         indexes = [
             models.Index(fields=["escrow", "status", "checked_at"]),
             models.Index(fields=["status", "checked_at"]),
+        ]
+
+
+def financing_document_upload_to(instance: FinancingDocument, filename: str) -> str:
+    return f"financing/{instance.application_id}/documents/{filename}"
+
+
+class FinancingPartner(BaseModel):
+    """Approved financial partner metadata.
+
+    API credentials and underwriting rules are deliberately not stored here.
+    RealityNG orchestrates applications; the partner owns credit decisions.
+    """
+
+    name = models.CharField(max_length=160)
+    slug = models.SlugField(max_length=180, unique=True)
+    status = models.CharField(
+        max_length=32,
+        choices=FinancingPartnerStatus.choices,
+        default=FinancingPartnerStatus.DRAFT,
+        db_index=True,
+    )
+    partner_type = models.CharField(
+        max_length=32,
+        choices=FinancingPartnerType.choices,
+        default=FinancingPartnerType.MANUAL,
+    )
+    integration_mode = models.CharField(
+        max_length=24,
+        choices=FinancingIntegrationMode.choices,
+        default=FinancingIntegrationMode.MANUAL,
+    )
+    supported_products = models.JSONField(default=list, blank=True)
+    supported_states = models.JSONField(default=list, blank=True)
+    minimum_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    maximum_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    contact_policy = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+        indexes = [
+            models.Index(fields=["status", "partner_type"]),
+            models.Index(fields=["integration_mode", "status"]),
+            models.Index(fields=["slug"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(minimum_amount__gte=0, maximum_amount__gte=0),
+                name="financing_partner_amounts_non_negative",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def supports_product_type(self, product_type: str) -> bool:
+        products = [str(item) for item in (self.supported_products or [])]
+        return not products or product_type in products
+
+    def supports_state(self, state: str) -> bool:
+        states = [str(item).lower() for item in (self.supported_states or [])]
+        return not states or state.lower() in states
+
+
+class FinancingProduct(BaseModel):
+    partner = models.ForeignKey(
+        FinancingPartner,
+        on_delete=models.PROTECT,
+        related_name="products",
+    )
+    name = models.CharField(max_length=180)
+    product_type = models.CharField(max_length=32, choices=FinancingProductType.choices)
+    status = models.CharField(
+        max_length=24,
+        choices=FinancingProductStatus.choices,
+        default=FinancingProductStatus.DRAFT,
+        db_index=True,
+    )
+    currency = models.CharField(max_length=3, default="NGN")
+    minimum_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    maximum_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    minimum_tenor_months = models.PositiveSmallIntegerField(default=1)
+    maximum_tenor_months = models.PositiveSmallIntegerField(default=24)
+    requires_property = models.BooleanField(default=True)
+    requires_income_documents = models.BooleanField(default=True)
+    requires_identity_verification = models.BooleanField(default=True)
+    requires_bank_statement = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["product_type", "name"]
+        indexes = [
+            models.Index(fields=["status", "product_type"]),
+            models.Index(fields=["partner", "status"]),
+            models.Index(fields=["currency", "status"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(minimum_amount__gt=0, maximum_amount__gte=models.F("minimum_amount")),
+                name="financing_product_amount_range_valid",
+            ),
+            models.CheckConstraint(
+                check=Q(maximum_tenor_months__gte=models.F("minimum_tenor_months")),
+                name="financing_product_tenor_range_valid",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.product_type})"
+
+
+class FinancingApplication(BaseModel):
+    VALID_TRANSITIONS: dict[str, set[str]] = {
+        FinancingApplicationStatus.DRAFT: {
+            FinancingApplicationStatus.SUBMITTED,
+            FinancingApplicationStatus.CANCELLED,
+        },
+        FinancingApplicationStatus.SUBMITTED: {
+            FinancingApplicationStatus.UNDER_REVIEW,
+            FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+            FinancingApplicationStatus.REJECTED,
+            FinancingApplicationStatus.CANCELLED,
+        },
+        FinancingApplicationStatus.UNDER_REVIEW: {
+            FinancingApplicationStatus.PARTNER_REVIEW,
+            FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+            FinancingApplicationStatus.REJECTED,
+            FinancingApplicationStatus.CANCELLED,
+        },
+        FinancingApplicationStatus.PARTNER_REVIEW: {
+            FinancingApplicationStatus.OFFER_RECEIVED,
+            FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+            FinancingApplicationStatus.REJECTED,
+            FinancingApplicationStatus.EXPIRED,
+        },
+        FinancingApplicationStatus.MORE_INFORMATION_REQUESTED: {
+            FinancingApplicationStatus.SUBMITTED,
+            FinancingApplicationStatus.CANCELLED,
+        },
+        FinancingApplicationStatus.OFFER_RECEIVED: {
+            FinancingApplicationStatus.OFFER_ACCEPTED,
+            FinancingApplicationStatus.OFFER_DECLINED,
+            FinancingApplicationStatus.EXPIRED,
+        },
+        FinancingApplicationStatus.OFFER_ACCEPTED: set(),
+        FinancingApplicationStatus.OFFER_DECLINED: set(),
+        FinancingApplicationStatus.REJECTED: set(),
+        FinancingApplicationStatus.CANCELLED: set(),
+        FinancingApplicationStatus.EXPIRED: set(),
+    }
+
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="financing_applications",
+    )
+    property = models.ForeignKey(
+        "properties.Property",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="financing_applications",
+    )
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="financing_applications",
+    )
+    product = models.ForeignKey(
+        FinancingProduct,
+        on_delete=models.PROTECT,
+        related_name="applications",
+    )
+    partner = models.ForeignKey(
+        FinancingPartner,
+        on_delete=models.PROTECT,
+        related_name="applications",
+    )
+    application_reference = models.CharField(max_length=80, unique=True)
+    status = models.CharField(
+        max_length=40,
+        choices=FinancingApplicationStatus.choices,
+        default=FinancingApplicationStatus.DRAFT,
+        db_index=True,
+    )
+    requested_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    currency = models.CharField(max_length=3, default="NGN")
+    purpose = models.TextField()
+    preferred_tenor_months = models.PositiveSmallIntegerField()
+    employment_status = models.CharField(max_length=80)
+    monthly_income_band = models.CharField(max_length=80)
+    state = models.CharField(max_length=100)
+    city = models.CharField(max_length=120, blank=True)
+    consent_status = models.CharField(
+        max_length=24,
+        choices=FinancingConsentStatus.choices,
+        default=FinancingConsentStatus.NOT_GRANTED,
+        db_index=True,
+    )
+    applicant_message = models.TextField(blank=True)
+    admin_notes = models.TextField(blank=True)
+    partner_status = models.CharField(max_length=80, blank=True)
+    partner_reference = models.CharField(max_length=160, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    partner_submitted_at = models.DateTimeField(null=True, blank=True)
+    decision_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["applicant", "status", "created_at"]),
+            models.Index(fields=["partner", "status", "created_at"]),
+            models.Index(fields=["product", "status"]),
+            models.Index(fields=["property", "status"]),
+            models.Index(fields=["transaction", "status"]),
+            models.Index(fields=["state", "city", "status"]),
+            models.Index(fields=["application_reference"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(requested_amount__gt=0),
+                name="financing_application_amount_positive",
+            ),
+            models.CheckConstraint(
+                check=Q(preferred_tenor_months__gt=0),
+                name="financing_application_tenor_positive",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.application_reference} ({self.status})"
+
+    def can_transition_to(self, new_status: str) -> bool:
+        return new_status in self.VALID_TRANSITIONS.get(self.status, set())
+
+
+class FinancingConsent(BaseModel):
+    application = models.ForeignKey(
+        FinancingApplication,
+        on_delete=models.CASCADE,
+        related_name="consents",
+    )
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="financing_consents",
+    )
+    scope = models.CharField(max_length=200)
+    accepted_terms_version = models.CharField(max_length=40)
+    consented_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-consented_at"]
+        indexes = [
+            models.Index(fields=["application", "consented_at"]),
+            models.Index(fields=["applicant", "consented_at"]),
+        ]
+
+
+class FinancingDocumentRequirement(BaseModel):
+    product = models.ForeignKey(
+        FinancingProduct,
+        on_delete=models.CASCADE,
+        related_name="document_requirements",
+    )
+    document_type = models.CharField(max_length=40, choices=FinancingDocumentType.choices)
+    required = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+    allowed_mime_types = models.JSONField(default=list, blank=True)
+    max_size_mb = models.PositiveSmallIntegerField(default=10)
+
+    class Meta:
+        ordering = ["product", "document_type"]
+        indexes = [models.Index(fields=["product", "required"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "document_type"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_live_financing_requirement_per_type",
+            ),
+        ]
+
+
+class FinancingDocument(BaseModel):
+    application = models.ForeignKey(
+        FinancingApplication,
+        on_delete=models.CASCADE,
+        related_name="documents",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="financing_documents",
+    )
+    document_type = models.CharField(max_length=40, choices=FinancingDocumentType.choices)
+    file = models.FileField(
+        upload_to=financing_document_upload_to,
+        storage=get_financing_document_storage,
+        validators=[validate_financing_document],
+    )
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    file_size = models.PositiveIntegerField()
+    checksum = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(
+        max_length=32,
+        choices=FinancingDocumentStatus.choices,
+        default=FinancingDocumentStatus.UPLOADED,
+        db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewed_financing_documents",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["application", "document_type", "status"]),
+            models.Index(fields=["uploaded_by", "created_at"]),
+            models.Index(fields=["checksum"]),
+        ]
+
+
+class FinancingPartnerSubmission(BaseModel):
+    application = models.ForeignKey(
+        FinancingApplication,
+        on_delete=models.CASCADE,
+        related_name="partner_submissions",
+    )
+    partner = models.ForeignKey(
+        FinancingPartner,
+        on_delete=models.PROTECT,
+        related_name="financing_submissions",
+    )
+    submission_reference = models.CharField(max_length=160)
+    status = models.CharField(
+        max_length=32,
+        choices=FinancingPartnerSubmissionStatus.choices,
+        default=FinancingPartnerSubmissionStatus.PENDING,
+        db_index=True,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    response_received_at = models.DateTimeField(null=True, blank=True)
+    payload_hash = models.CharField(max_length=64, blank=True)
+    error_message = models.CharField(max_length=255, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["application", "status"]),
+            models.Index(fields=["partner", "status", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["partner", "submission_reference"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_live_financing_partner_submission_ref",
+            ),
+        ]
+
+
+class FinancingOffer(BaseModel):
+    application = models.ForeignKey(
+        FinancingApplication,
+        on_delete=models.CASCADE,
+        related_name="offers",
+    )
+    partner = models.ForeignKey(
+        FinancingPartner,
+        on_delete=models.PROTECT,
+        related_name="financing_offers",
+    )
+    offer_reference = models.CharField(max_length=160)
+    status = models.CharField(
+        max_length=24,
+        choices=FinancingOfferStatus.choices,
+        default=FinancingOfferStatus.PENDING,
+        db_index=True,
+    )
+    approved_amount = models.DecimalField(max_digits=18, decimal_places=2)
+    currency = models.CharField(max_length=3)
+    tenor_months = models.PositiveSmallIntegerField()
+    interest_rate_display = models.CharField(max_length=120, blank=True)
+    fees_display = models.CharField(max_length=200, blank=True)
+    monthly_payment_display = models.CharField(max_length=120, blank=True)
+    partner_terms_summary = models.TextField(blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    declined_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["application", "status", "created_at"]),
+            models.Index(fields=["partner", "status"]),
+            models.Index(fields=["offer_reference"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["partner", "offer_reference"],
+                condition=Q(deleted_at__isnull=True),
+                name="unique_live_financing_offer_reference",
+            ),
+            models.CheckConstraint(
+                check=Q(approved_amount__gt=0),
+                name="financing_offer_amount_positive",
+            ),
+        ]
+
+
+class FinancingTimelineEvent(BaseModel):
+    application = models.ForeignKey(
+        FinancingApplication,
+        on_delete=models.CASCADE,
+        related_name="timeline_events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="financing_timeline_events",
+    )
+    event_type = models.CharField(max_length=80)
+    message = models.TextField()
+    visibility = models.CharField(
+        max_length=20,
+        choices=FinancingTimelineVisibility.choices,
+        default=FinancingTimelineVisibility.APPLICANT,
+        db_index=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["application", "visibility", "created_at"]),
+            models.Index(fields=["event_type", "created_at"]),
         ]

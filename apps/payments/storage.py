@@ -50,3 +50,29 @@ def get_payment_proof_storage():
             location=str(settings.BASE_DIR / "media" / "payment-proofs-private")
         )
     return PrivatePaymentProofStorage()
+
+
+class PrivateFinancingDocumentStorage(S3Boto3Storage):
+    """S3/MinIO-backed storage for private financing documents."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("bucket_name", settings.FINANCING_DOCUMENT_BUCKET_NAME)
+        kwargs.setdefault("default_acl", "private")
+        kwargs.setdefault("file_overwrite", False)
+        kwargs.setdefault("querystring_auth", True)
+        kwargs.setdefault(
+            "querystring_expire",
+            settings.FINANCING_DOCUMENT_SIGNED_URL_EXPIRY,
+        )
+        kwargs.setdefault("custom_domain", False)
+        super().__init__(*args, **kwargs)
+
+
+def get_financing_document_storage():
+    from django.core.files.storage import FileSystemStorage
+
+    if not getattr(settings, "USE_S3_MEDIA_STORAGE", False):
+        return FileSystemStorage(
+            location=str(settings.BASE_DIR / "media" / "financing-documents-private")
+        )
+    return PrivateFinancingDocumentStorage()

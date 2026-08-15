@@ -8,7 +8,18 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.accounts.models import User
-from apps.payments.models import Transaction
+from apps.payments.choices import (
+    FinancingDocumentType,
+    FinancingPartnerStatus,
+    FinancingProductStatus,
+    FinancingProductType,
+)
+from apps.payments.models import (
+    FinancingDocumentRequirement,
+    FinancingPartner,
+    FinancingProduct,
+    Transaction,
+)
 from apps.properties.choices import (
     ListingType,
     PropertyStatus,
@@ -95,5 +106,61 @@ def valid_proof_file():
     return SimpleUploadedFile(
         "receipt.pdf",
         b"%PDF-1.4\n%fake but valid header for test purposes",
+        content_type="application/pdf",
+    )
+
+
+@pytest.fixture
+def financing_partner(db):
+    return FinancingPartner.objects.create(
+        name="Manual Financing Partner",
+        slug="manual-finance",
+        status=FinancingPartnerStatus.ACTIVE,
+        partner_type="manual",
+        integration_mode="manual",
+        supported_products=[FinancingProductType.RENT_FINANCE, FinancingProductType.MORTGAGE],
+        supported_states=["Lagos", "Abuja"],
+        minimum_amount=Decimal("100000.00"),
+        maximum_amount=Decimal("50000000.00"),
+        contact_policy="Manual partner handoff only.",
+    )
+
+
+@pytest.fixture
+def financing_product(financing_partner):
+    product = FinancingProduct.objects.create(
+        partner=financing_partner,
+        name="Rent Finance MVP",
+        product_type=FinancingProductType.RENT_FINANCE,
+        status=FinancingProductStatus.ACTIVE,
+        currency="NGN",
+        minimum_amount=Decimal("100000.00"),
+        maximum_amount=Decimal("5000000.00"),
+        minimum_tenor_months=1,
+        maximum_tenor_months=12,
+        requires_property=True,
+        requires_income_documents=True,
+        requires_bank_statement=True,
+    )
+    FinancingDocumentRequirement.objects.create(
+        product=product,
+        document_type=FinancingDocumentType.IDENTITY,
+        required=True,
+        description="Government-issued ID.",
+    )
+    FinancingDocumentRequirement.objects.create(
+        product=product,
+        document_type=FinancingDocumentType.BANK_STATEMENT,
+        required=True,
+        description="Recent bank statement.",
+    )
+    return product
+
+
+@pytest.fixture
+def valid_financing_document_file():
+    return SimpleUploadedFile(
+        "statement.pdf",
+        b"%PDF-1.4\n%fake but valid header for financing document tests",
         content_type="application/pdf",
     )

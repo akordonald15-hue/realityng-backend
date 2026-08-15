@@ -152,3 +152,96 @@ class EscrowReconciliationRecordStatus(models.TextChoices):
     MISMATCH = "mismatch", "Mismatch"
     PENDING_REVIEW = "pending_review", "Pending Review"
     RESOLVED = "resolved", "Resolved"
+
+
+class FinancingPartnerStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    ACTIVE = "active", "Active"
+    SUSPENDED = "suspended", "Suspended"
+    DISABLED = "disabled", "Disabled"
+
+
+class FinancingPartnerType(models.TextChoices):
+    BANK = "bank", "Bank"
+    FINTECH = "fintech", "Fintech"
+    MORTGAGE_BANK = "mortgage_bank", "Mortgage Bank"
+    COOPERATIVE = "cooperative", "Cooperative"
+    MANUAL = "manual", "Manual Partner"
+
+
+class FinancingIntegrationMode(models.TextChoices):
+    MANUAL = "manual", "Manual"
+    API = "api", "API"
+    HYBRID = "hybrid", "Hybrid"
+
+
+class FinancingProductType(models.TextChoices):
+    RENT_FINANCE = "rent_finance", "Rent Finance"
+    MORTGAGE = "mortgage", "Mortgage"
+
+
+class FinancingProductStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    ACTIVE = "active", "Active"
+    DISABLED = "disabled", "Disabled"
+
+
+class FinancingApplicationStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    SUBMITTED = "submitted", "Submitted"
+    UNDER_REVIEW = "under_review", "Under Review"
+    PARTNER_REVIEW = "partner_review", "Partner Review"
+    MORE_INFORMATION_REQUESTED = (
+        "more_information_requested",
+        "More Information Requested",
+    )
+    OFFER_RECEIVED = "offer_received", "Offer Received"
+    OFFER_ACCEPTED = "offer_accepted", "Offer Accepted"
+    OFFER_DECLINED = "offer_declined", "Offer Declined"
+    REJECTED = "rejected", "Rejected"
+    CANCELLED = "cancelled", "Cancelled"
+    EXPIRED = "expired", "Expired"
+
+
+class FinancingConsentStatus(models.TextChoices):
+    NOT_GRANTED = "not_granted", "Not Granted"
+    GRANTED = "granted", "Granted"
+    REVOKED = "revoked", "Revoked"
+
+
+class FinancingDocumentType(models.TextChoices):
+    IDENTITY = "identity", "Identity"
+    BANK_STATEMENT = "bank_statement", "Bank Statement"
+    INCOME_PROOF = "income_proof", "Income Proof"
+    EMPLOYMENT_LETTER = "employment_letter", "Employment Letter"
+    PROPERTY_DOCUMENT = "property_document", "Property Document"
+    OTHER = "other", "Other"
+
+
+class FinancingDocumentStatus(models.TextChoices):
+    UPLOADED = "uploaded", "Uploaded"
+    UNDER_REVIEW = "under_review", "Under Review"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+
+
+class FinancingPartnerSubmissionStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    SUBMITTED = "submitted", "Submitted"
+    ACKNOWLEDGED = "acknowledged", "Acknowledged"
+    FAILED = "failed", "Failed"
+
+
+class FinancingOfferStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACTIVE = "active", "Active"
+    ACCEPTED = "accepted", "Accepted"
+    DECLINED = "declined", "Declined"
+    EXPIRED = "expired", "Expired"
+    WITHDRAWN = "withdrawn", "Withdrawn"
+
+
+class FinancingTimelineVisibility(models.TextChoices):
+    INTERNAL = "internal", "Internal"
+    APPLICANT = "applicant", "Applicant"
+    PARTNER = "partner", "Partner"

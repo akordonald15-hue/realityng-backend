@@ -103,3 +103,44 @@ def sanitize_original_filename(filename: str) -> str:
     safe_chars = "-_. "
     cleaned = "".join(c for c in name if c.isalnum() or c in safe_chars)
     return cleaned.strip() or "document"
+
+
+def validate_financing_document(value) -> None:
+    content_type = getattr(value, "content_type", "")
+    allowed_types = set(settings.FINANCING_DOCUMENT_ALLOWED_TYPES)
+    if content_type not in allowed_types:
+        raise ValidationError(
+            f"Unsupported file type '{content_type}'. Allowed types: "
+            f"{', '.join(sorted(allowed_types))}."
+        )
+
+    allowed_extensions = set(settings.FINANCING_DOCUMENT_ALLOWED_EXTENSIONS)
+    extension = Path(value.name).suffix.lower()
+    if extension not in allowed_extensions:
+        raise ValidationError(
+            f"File extension must be one of: {', '.join(sorted(allowed_extensions))}."
+        )
+
+    max_size = settings.FINANCING_DOCUMENT_MAX_SIZE_MB * 1024 * 1024
+    if value.size > max_size:
+        raise ValidationError(
+            f"File must be {settings.FINANCING_DOCUMENT_MAX_SIZE_MB}MB or smaller."
+        )
+
+    _verify_financing_document_content(value, content_type)
+    value.seek(0)
+
+
+def _verify_financing_document_content(value, content_type: str) -> None:
+    if content_type == "application/pdf":
+        header = value.read(len(PDF_MAGIC_BYTES))
+        value.seek(0)
+        if header != PDF_MAGIC_BYTES:
+            raise ValidationError("Uploaded file must be a valid PDF.")
+        return
+
+    if content_type in {"image/jpeg", "image/png"}:
+        _verify_real_content(value, content_type)
+        return
+
+    raise ValidationError("Unable to verify file content for this type.")

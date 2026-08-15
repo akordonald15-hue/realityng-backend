@@ -61,6 +61,12 @@
 | `CONSTRUCTION_ALLOWED_VIDEO_TYPES` | `video/mp4,video/webm` | Allowed construction video MIME types. |
 | `CONSTRUCTION_ALLOWED_DOCUMENT_TYPES` | `application/pdf` | Allowed construction document MIME types. |
 | `CONSTRUCTION_ALLOWED_EXTENSIONS` | `.jpg,.jpeg,.png,.webp,.mp4,.webm,.pdf` | Allowed construction evidence file extensions. |
+| `FINANCING_DOCUMENT_BUCKET_NAME` | `realityng-financing-private` | Private bucket for financing application documents. Do not make this bucket public. |
+| `FINANCING_DOCUMENT_SIGNED_URL_EXPIRY` | `300` | Signed URL lifetime for private financing documents. |
+| `FINANCING_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum financing document upload size in megabytes. |
+| `FINANCING_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed financing document MIME types. |
+| `FINANCING_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed financing document extensions. |
+| `FINANCING_CONSENT_TERMS_VERSION` | `financing-v1` | Consent terms version recorded when applicants grant partner-sharing consent. |
 | `INSPECTION_EVIDENCE_BUCKET` | `realityng-inspection-evidence` | Private bucket for inspection evidence. |
 | `INSPECTION_REPORT_BUCKET` | `realityng-inspection-reports` | Private bucket for inspection report documents. |
 | `INSPECTION_SIGNED_URL_EXPIRY_SECONDS` | `300` | Signed inspection report/evidence URL lifetime in seconds. |

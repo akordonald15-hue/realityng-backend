@@ -220,6 +220,22 @@ REST_FRAMEWORK = {
         "escrow_admin_action": env("DRF_THROTTLE_ESCROW_ADMIN_ACTION_RATE", default="120/hour"),
         "escrow_reconcile": env("DRF_THROTTLE_ESCROW_RECONCILE_RATE", default="60/hour"),
         "escrow_webhook": env("DRF_THROTTLE_ESCROW_WEBHOOK_RATE", default="600/hour"),
+        "financing_application_create": env(
+            "DRF_THROTTLE_FINANCING_APPLICATION_CREATE_RATE",
+            default="10/hour",
+        ),
+        "financing_document_upload": env(
+            "DRF_THROTTLE_FINANCING_DOCUMENT_UPLOAD_RATE",
+            default="20/hour",
+        ),
+        "financing_signed_url": env(
+            "DRF_THROTTLE_FINANCING_SIGNED_URL_RATE",
+            default="120/hour",
+        ),
+        "financing_admin_action": env(
+            "DRF_THROTTLE_FINANCING_ADMIN_ACTION_RATE",
+            default="120/hour",
+        ),
         "notification_write": env("DRF_THROTTLE_NOTIFICATION_WRITE_RATE", default="120/hour"),
         "message_thread_create": env("DRF_THROTTLE_MESSAGE_THREAD_CREATE_RATE", default="30/hour"),
         "message_send": env("DRF_THROTTLE_MESSAGE_SEND_RATE", default="120/hour"),
@@ -565,3 +581,22 @@ PAYMENT_PROOF_ALLOWED_TYPES = env.list(
     default=["application/pdf", "image/jpeg", "image/png"],
 )
 PAYMENT_PROOF_MAX_SIZE_MB = env.int("PAYMENT_PROOF_MAX_SIZE_MB", default=10)
+
+FINANCING_DOCUMENT_ALLOWED_EXTENSIONS = env.list(
+    "FINANCING_DOCUMENT_ALLOWED_EXTENSIONS",
+    default=[".pdf", ".jpg", ".jpeg", ".png"],
+)
+FINANCING_DOCUMENT_BUCKET_NAME = env(
+    "FINANCING_DOCUMENT_BUCKET_NAME",
+    default="realityng-financing-documents-private",
+)
+FINANCING_DOCUMENT_SIGNED_URL_EXPIRY = env.int(
+    "FINANCING_DOCUMENT_SIGNED_URL_EXPIRY",
+    default=300,
+)
+FINANCING_DOCUMENT_ALLOWED_TYPES = env.list(
+    "FINANCING_DOCUMENT_ALLOWED_TYPES",
+    default=["application/pdf", "image/jpeg", "image/png"],
+)
+FINANCING_DOCUMENT_MAX_SIZE_MB = env.int("FINANCING_DOCUMENT_MAX_SIZE_MB", default=10)
+FINANCING_CONSENT_TERMS_VERSION = env("FINANCING_CONSENT_TERMS_VERSION", default="2026-08")

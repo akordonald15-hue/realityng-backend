@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from apps.payments.choices import (
+    FinancingApplicationStatus,
+    FinancingDocumentType,
+    FinancingProductStatus,
+    FinancingTimelineVisibility,
+)
 from apps.payments.models import (
     EscrowCondition,
     EscrowFundingEvent,
@@ -12,12 +19,22 @@ from apps.payments.models import (
     EscrowSettlement,
     EscrowSettlementAllocation,
     EscrowTransaction,
+    FinancingApplication,
+    FinancingConsent,
+    FinancingDocument,
+    FinancingDocumentRequirement,
+    FinancingOffer,
+    FinancingPartner,
+    FinancingPartnerSubmission,
+    FinancingProduct,
+    FinancingTimelineEvent,
     PaymentDispute,
     PaymentMilestone,
     PaymentProof,
     ProviderWebhookEvent,
     Transaction,
 )
+from apps.payments.validators import compute_checksum, sanitize_original_filename
 from apps.properties.choices import RentalApplicationStatus
 from apps.properties.models import Property, RentalApplication
 
@@ -453,3 +470,311 @@ class EscrowReconcileSerializer(serializers.Serializer):
     provider_amount = serializers.DecimalField(max_digits=18, decimal_places=2)
     provider_status = serializers.CharField(max_length=40)
     mismatch_details = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class FinancingPartnerPublicSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingPartner
+        fields = [
+            "id", "name", "slug", "status", "partner_type", "integration_mode",
+            "supported_products", "supported_states", "minimum_amount",
+            "maximum_amount", "contact_policy", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingDocumentRequirementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingDocumentRequirement
+        fields = [
+            "id", "document_type", "required", "description", "allowed_mime_types",
+            "max_size_mb", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingProductSerializer(serializers.ModelSerializer):
+    partner = FinancingPartnerPublicSerializer(read_only=True)
+    document_requirements = FinancingDocumentRequirementSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = FinancingProduct
+        fields = [
+            "id", "partner", "name", "product_type", "status", "currency",
+            "minimum_amount", "maximum_amount", "minimum_tenor_months",
+            "maximum_tenor_months", "requires_property", "requires_income_documents",
+            "requires_identity_verification", "requires_bank_statement", "description",
+            "document_requirements", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingDocument
+        fields = [
+            "id", "application", "uploaded_by", "document_type", "original_filename",
+            "mime_type", "file_size", "checksum", "status", "reviewed_by",
+            "reviewed_at", "rejection_reason", "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "id", "application", "uploaded_by", "original_filename", "mime_type",
+            "file_size", "checksum", "status", "reviewed_by", "reviewed_at",
+            "rejection_reason", "created_at", "updated_at",
+        ]
+
+
+class FinancingDocumentUploadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingDocument
+        fields = ["document_type", "file"]
+
+    def validate_document_type(self, value):
+        if value not in {choice.value for choice in FinancingDocumentType}:
+            raise serializers.ValidationError("Unsupported document type.")
+        return value
+
+    def create(self, validated_data):
+        file = validated_data["file"]
+        return FinancingDocument.objects.create(
+            application=self.context["application"],
+            uploaded_by=self.context["request"].user,
+            document_type=validated_data["document_type"],
+            file=file,
+            original_filename=sanitize_original_filename(file.name),
+            mime_type=getattr(file, "content_type", ""),
+            file_size=file.size,
+            checksum=compute_checksum(file),
+        )
+
+
+class FinancingConsentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingConsent
+        fields = [
+            "id", "application", "applicant", "scope", "accepted_terms_version",
+            "consented_at", "revoked_at", "ip_address", "user_agent",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingTimelineEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingTimelineEvent
+        fields = [
+            "id", "application", "actor", "event_type", "message", "visibility",
+            "metadata", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingPartnerSubmissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingPartnerSubmission
+        fields = [
+            "id", "application", "partner", "submission_reference", "status",
+            "submitted_at", "response_received_at", "payload_hash", "error_message",
+            "retry_count", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingOfferSerializer(serializers.ModelSerializer):
+    partner = FinancingPartnerPublicSerializer(read_only=True)
+
+    class Meta:
+        model = FinancingOffer
+        fields = [
+            "id", "application", "partner", "offer_reference", "status",
+            "approved_amount", "currency", "tenor_months", "interest_rate_display",
+            "fees_display", "monthly_payment_display", "partner_terms_summary",
+            "expires_at", "accepted_at", "declined_at", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FinancingApplicationSerializer(serializers.ModelSerializer):
+    product = FinancingProductSerializer(read_only=True)
+    partner = FinancingPartnerPublicSerializer(read_only=True)
+    documents = FinancingDocumentSerializer(many=True, read_only=True)
+    offers = FinancingOfferSerializer(many=True, read_only=True)
+    timeline_events = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FinancingApplication
+        fields = [
+            "id", "applicant", "property", "transaction", "product", "partner",
+            "application_reference", "status", "requested_amount", "currency",
+            "purpose", "preferred_tenor_months", "employment_status",
+            "monthly_income_band", "state", "city", "consent_status",
+            "applicant_message", "partner_status", "partner_reference",
+            "submitted_at", "partner_submitted_at", "decision_at", "documents",
+            "offers", "timeline_events", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(FinancingTimelineEventSerializer(many=True))
+    def get_timeline_events(self, obj):
+        request = self.context.get("request")
+        is_admin = bool(request and getattr(request.user, "is_staff", False))
+        events = obj.timeline_events.all()
+        if not is_admin:
+            events = events.exclude(visibility=FinancingTimelineVisibility.INTERNAL)
+        return FinancingTimelineEventSerializer(events, many=True).data
+
+
+class FinancingApplicationAdminSerializer(FinancingApplicationSerializer):
+    partner_submissions = FinancingPartnerSubmissionSerializer(many=True, read_only=True)
+
+    class Meta(FinancingApplicationSerializer.Meta):
+        fields = FinancingApplicationSerializer.Meta.fields + [
+            "admin_notes",
+            "partner_submissions",
+        ]
+        read_only_fields = fields
+
+
+class FinancingApplicationCreateSerializer(serializers.Serializer):
+    product_id = serializers.UUIDField()
+    property_id = serializers.UUIDField(required=False, allow_null=True)
+    transaction_id = serializers.UUIDField(required=False, allow_null=True)
+    requested_amount = serializers.DecimalField(max_digits=18, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default="NGN")
+    purpose = serializers.CharField()
+    preferred_tenor_months = serializers.IntegerField(min_value=1)
+    employment_status = serializers.CharField(max_length=80)
+    monthly_income_band = serializers.CharField(max_length=80)
+    state = serializers.CharField(max_length=100)
+    city = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    applicant_message = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_product_id(self, value):
+        try:
+            product = FinancingProduct.objects.select_related("partner").get(
+                id=value,
+                status=FinancingProductStatus.ACTIVE,
+                partner__status="active",
+            )
+        except FinancingProduct.DoesNotExist as exc:
+            raise serializers.ValidationError("Financing product is not available.") from exc
+        self.context["product"] = product
+        return value
+
+    def validate_property_id(self, value):
+        if value is None:
+            return value
+        try:
+            prop = Property.objects.get(id=value)
+        except Property.DoesNotExist as exc:
+            raise serializers.ValidationError("Property is not available.") from exc
+        self.context["property"] = prop
+        return value
+
+    def validate_transaction_id(self, value):
+        if value is None:
+            return value
+        try:
+            transaction = Transaction.objects.select_related("property").get(id=value)
+        except Transaction.DoesNotExist as exc:
+            raise serializers.ValidationError("Transaction is not available.") from exc
+        request = self.context["request"]
+        if transaction.buyer_id != request.user.id:
+            raise serializers.ValidationError("Transaction is not available.")
+        self.context["transaction"] = transaction
+        return value
+
+    def validate_currency(self, value):
+        value = value.upper()
+        if len(value) != 3 or not value.isalpha():
+            raise serializers.ValidationError("Currency must be a 3-letter ISO code.")
+        return value
+
+    def validate(self, attrs):
+        product = self.context["product"]
+        amount = attrs["requested_amount"]
+        tenor = attrs["preferred_tenor_months"]
+        state = attrs["state"]
+        if attrs["currency"].upper() != product.currency:
+            raise serializers.ValidationError({"currency": "Currency must match the product."})
+        if amount < product.minimum_amount or amount > product.maximum_amount:
+            raise serializers.ValidationError(
+                {"requested_amount": "Amount is outside the selected product limits."}
+            )
+        if tenor < product.minimum_tenor_months or tenor > product.maximum_tenor_months:
+            raise serializers.ValidationError(
+                {"preferred_tenor_months": "Tenor is outside the selected product limits."}
+            )
+        if product.requires_property and not (
+            self.context.get("property") or self.context.get("transaction")
+        ):
+            raise serializers.ValidationError(
+                {"property_id": "This product requires a property or transaction."}
+            )
+        if not product.partner.supports_product_type(product.product_type):
+            raise serializers.ValidationError("Partner does not support this product.")
+        if not product.partner.supports_state(state):
+            raise serializers.ValidationError({"state": "Partner does not support this state."})
+        transaction = self.context.get("transaction")
+        prop = self.context.get("property")
+        if transaction and prop and transaction.property_id != prop.id:
+            raise serializers.ValidationError(
+                {"transaction_id": "Transaction must belong to the selected property."}
+            )
+        return attrs
+
+
+class FinancingApplicationUpdateSerializer(serializers.Serializer):
+    requested_amount = serializers.DecimalField(max_digits=18, decimal_places=2, required=False)
+    purpose = serializers.CharField(required=False)
+    preferred_tenor_months = serializers.IntegerField(min_value=1, required=False)
+    employment_status = serializers.CharField(max_length=80, required=False)
+    monthly_income_band = serializers.CharField(max_length=80, required=False)
+    state = serializers.CharField(max_length=100, required=False)
+    city = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    applicant_message = serializers.CharField(required=False, allow_blank=True)
+
+
+class FinancingConsentCreateSerializer(serializers.Serializer):
+    scope = serializers.CharField(max_length=200, default="financing_partner_submission")
+    accepted_terms_version = serializers.CharField(max_length=40, required=False)
+
+
+class FinancingApplicationSubmitSerializer(serializers.Serializer):
+    pass
+
+
+class FinancingAdminDecisionSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=[
+            FinancingApplicationStatus.UNDER_REVIEW,
+            FinancingApplicationStatus.MORE_INFORMATION_REQUESTED,
+            FinancingApplicationStatus.REJECTED,
+            FinancingApplicationStatus.CANCELLED,
+        ]
+    )
+    message = serializers.CharField(required=False, allow_blank=True, default="")
+    admin_notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class FinancingPartnerSubmitSerializer(serializers.Serializer):
+    submission_reference = serializers.CharField(max_length=160)
+    payload_hash = serializers.CharField(
+        max_length=64,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    message = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class FinancingOfferCreateSerializer(serializers.Serializer):
+    offer_reference = serializers.CharField(max_length=160)
+    approved_amount = serializers.DecimalField(max_digits=18, decimal_places=2)
+    currency = serializers.CharField(max_length=3)
+    tenor_months = serializers.IntegerField(min_value=1)
+    interest_rate_display = serializers.CharField(required=False, allow_blank=True, default="")
+    fees_display = serializers.CharField(required=False, allow_blank=True, default="")
+    monthly_payment_display = serializers.CharField(required=False, allow_blank=True, default="")
+    partner_terms_summary = serializers.CharField(required=False, allow_blank=True, default="")
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
