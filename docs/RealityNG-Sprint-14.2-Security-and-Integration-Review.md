@@ -10,7 +10,7 @@ The review found three release-blocking financing defects and fixed them on the 
 - Expired financing offers could still be accepted.
 - Financing applications could be created against unapproved property records.
 
-Regression tests were added for these defects and related security surfaces. Financing-specific PostgreSQL validation passed. Full PostgreSQL regression could not be completed on this workstation because Docker was unavailable and the disposable local PostgreSQL cluster became unstable during the full-suite run. The local PostgreSQL service on port 5432 required credentials and could not be used non-interactively. Redis/Celery production-style regression was also not completed because Docker and local Redis were unavailable.
+Regression tests were added for these defects and related security surfaces. Financing-specific PostgreSQL validation, the full payments suite, and the full backend PostgreSQL regression now pass on an isolated disposable PostgreSQL 18 cluster. Redis/Celery production-style regression was not completed because Docker and local Redis were unavailable.
 
 ## Git Baseline
 
@@ -76,7 +76,7 @@ Reviewed product boundary:
 
 ## PostgreSQL Validation
 
-Completed successfully on an isolated local PostgreSQL 18 cluster before the cluster became unstable:
+Completed successfully on an isolated local PostgreSQL 18 cluster:
 
 - Django database engine confirmed as `django.db.backends.postgresql`.
 - Clean migration path passed through payments `0001`, `0002`, `0003`, and `0004`.
@@ -86,11 +86,11 @@ Completed successfully on an isolated local PostgreSQL 18 cluster before the clu
 - `python manage.py migrate --plan`: passed.
 - `python manage.py spectacular --validate`: passed with 0 errors and existing enum warnings only.
 - `pytest apps/payments/tests/test_financing_api.py -q`: 17 passed.
-- `pytest apps/payments/tests -q`: 64 passed.
+- `pytest apps/payments/tests -q --reuse-db`: 64 passed.
+- `pytest -q --reuse-db`: 361 passed.
 
 Not completed:
 
-- Full backend PostgreSQL suite. The run reached 19% before command timeout/interruption. Parallel app-slice retries caused the disposable local PostgreSQL server on port 55432 to stop responding. A fresh disposable cluster on port 55433 did not complete initialization. The local PostgreSQL service on port 5432 was reachable but `createdb` blocked non-interactively for credentials.
 - Redis-backed Celery, Channels, and realtime outbox regression. Docker daemon and local Redis were unavailable.
 
 ## Backend Static and Schema Validation
@@ -121,10 +121,6 @@ The migration is forward-only and adds a partial unique constraint for active, n
 
 ## Remaining Blockers Before Merge Approval
 
-### Blocker: full backend PostgreSQL regression not completed
-
-The financing-specific PostgreSQL suite passed, but the required full backend PostgreSQL suite remains unconfirmed because the local database environment became unstable. This should be rerun in CI or a stable isolated Docker/staging stack before merge.
-
 ### Blocker: Redis/Celery/Channels regression not completed
 
 Sprint 14.2 did not intentionally modify realtime infrastructure, but the requested regression against Redis-backed Celery/Channels could not be run locally because Docker and Redis were unavailable. This should be completed before production deployment, or explicitly accepted as covered by a separate Sprint 13/14 regression gate.
@@ -133,4 +129,4 @@ Sprint 14.2 did not intentionally modify realtime infrastructure, but the reques
 
 NOT READY TO MERGE
 
-The Sprint 14.2 financing defects found during review were fixed and pushed for review, but the required full PostgreSQL regression and Redis/Celery integration gate still need a stable isolated environment before merge approval.
+The Sprint 14.2 financing defects found during review were fixed and pushed for review, and PostgreSQL regression passed. The Redis/Celery/Channels integration gate still needs a stable isolated Redis environment before merge approval.
