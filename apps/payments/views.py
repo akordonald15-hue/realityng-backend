@@ -964,10 +964,7 @@ class FinancingApplicationViewSet(ActionScopedThrottleMixin, viewsets.ModelViewS
                 application=application,
                 actor=request.user,
                 scope=serializer.validated_data.get("scope", "financing_partner_submission"),
-                accepted_terms_version=serializer.validated_data.get(
-                    "accepted_terms_version",
-                    settings.FINANCING_CONSENT_TERMS_VERSION,
-                ),
+                accepted_terms_version=settings.FINANCING_CONSENT_TERMS_VERSION,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )

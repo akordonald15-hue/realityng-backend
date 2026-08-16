@@ -35,7 +35,7 @@ from apps.payments.models import (
     Transaction,
 )
 from apps.payments.validators import compute_checksum, sanitize_original_filename
-from apps.properties.choices import RentalApplicationStatus
+from apps.properties.choices import PropertyStatus, RentalApplicationStatus
 from apps.properties.models import Property, RentalApplication
 
 
@@ -668,6 +668,8 @@ class FinancingApplicationCreateSerializer(serializers.Serializer):
             prop = Property.objects.get(id=value)
         except Property.DoesNotExist as exc:
             raise serializers.ValidationError("Property is not available.") from exc
+        if prop.status != PropertyStatus.APPROVED:
+            raise serializers.ValidationError("Property is not available for financing.")
         self.context["property"] = prop
         return value
 
@@ -737,7 +739,6 @@ class FinancingApplicationUpdateSerializer(serializers.Serializer):
 
 class FinancingConsentCreateSerializer(serializers.Serializer):
     scope = serializers.CharField(max_length=200, default="financing_partner_submission")
-    accepted_terms_version = serializers.CharField(max_length=40, required=False)
 
 
 class FinancingApplicationSubmitSerializer(serializers.Serializer):

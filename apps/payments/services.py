@@ -1130,24 +1130,28 @@ def grant_financing_consent(
     application = FinancingApplication.objects.select_for_update().get(id=application.id)
     if application.applicant_id != actor.id:
         raise ValidationError("You cannot consent for this financing application.")
-    consent = FinancingConsent.objects.create(
+    consent, created = FinancingConsent.objects.get_or_create(
         application=application,
         applicant=actor,
-        scope=scope,
         accepted_terms_version=accepted_terms_version,
-        consented_at=timezone.now(),
-        ip_address=ip_address,
-        user_agent=user_agent[:255],
+        revoked_at__isnull=True,
+        defaults={
+            "scope": scope,
+            "consented_at": timezone.now(),
+            "ip_address": ip_address,
+            "user_agent": user_agent[:255],
+        },
     )
     application.consent_status = FinancingConsentStatus.GRANTED
     application.save(update_fields=["consent_status", "updated_at"])
-    _create_financing_timeline(
-        application=application,
-        actor=actor,
-        event_type="financing_consent_granted",
-        message="Applicant consented to share application data with financing partners.",
-    )
-    create_audit_log(actor, "financing_consent_granted", consent, metadata={"scope": scope})
+    if created:
+        _create_financing_timeline(
+            application=application,
+            actor=actor,
+            event_type="financing_consent_granted",
+            message="Applicant consented to share application data with financing partners.",
+        )
+        create_audit_log(actor, "financing_consent_granted", consent, metadata={"scope": scope})
     return consent
 
 
@@ -1403,6 +1407,8 @@ def accept_financing_offer(*, offer: FinancingOffer, actor) -> FinancingOffer:
         raise ValidationError("You cannot accept this offer.")
     if offer.status != FinancingOfferStatus.ACTIVE:
         raise ValidationError("This offer is not active.")
+    if offer.expires_at and offer.expires_at <= timezone.now():
+        raise ValidationError("This offer has expired.")
     if application.status != FinancingApplicationStatus.OFFER_RECEIVED:
         raise ValidationError("Application is not ready for offer acceptance.")
     offer.status = FinancingOfferStatus.ACCEPTED

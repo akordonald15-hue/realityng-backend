@@ -1109,6 +1109,13 @@ class FinancingConsent(BaseModel):
             models.Index(fields=["application", "consented_at"]),
             models.Index(fields=["applicant", "consented_at"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["application", "applicant", "accepted_terms_version"],
+                condition=Q(deleted_at__isnull=True, revoked_at__isnull=True),
+                name="unique_active_financing_consent_per_terms",
+            ),
+        ]
 
 
 class FinancingDocumentRequirement(BaseModel):
