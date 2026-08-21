@@ -8,6 +8,7 @@ from PIL import Image
 from apps.accounts.choices import RoleName, UserRoleStatus
 from apps.accounts.models import AuditLog, Role, UserRole
 from apps.inspections.choices import (
+    AssignmentStatus,
     InspectionReportStatus,
     InspectionRequestStatus,
     WalkthroughStatus,
@@ -220,9 +221,48 @@ def test_admin_assigns_approved_inspector(
     assert InspectionAssignment.objects.filter(inspector=inspector_user).exists()
 
 
+@pytest.mark.parametrize(
+    "inactive_status",
+    [AssignmentStatus.DECLINED, AssignmentStatus.CANCELLED, AssignmentStatus.REASSIGNED],
+)
+def test_inactive_inspection_assignment_cannot_access_request_or_assignment(
+    api_client,
+    buyer,
+    admin_user,
+    inspector_user,
+    inspection_payload,
+    inactive_status,
+):
+    api_client.force_authenticate(buyer)
+    created = api_client.post(
+        reverse("inspection-requests-list"), inspection_payload, format="json"
+    )
+    api_client.force_authenticate(admin_user)
+    assigned = api_client.post(
+        reverse("inspection-admin-requests-assign", args=[created.data["id"]]),
+        {"inspector_id": str(inspector_user.id)},
+        format="json",
+    )
+    assignment = InspectionAssignment.objects.get(id=assigned.data["id"])
+    assignment.status = inactive_status
+    assignment.save(update_fields=["status", "updated_at"])
+
+    api_client.force_authenticate(inspector_user)
+    request_response = api_client.get(
+        reverse("inspection-requests-detail", args=[created.data["id"]])
+    )
+    assignment_response = api_client.get(
+        reverse("inspection-assignments-detail", args=[assignment.id])
+    )
+
+    assert request_response.status_code == 404
+    assert assignment_response.status_code == 404
+
+
 def test_inspector_report_evidence_signed_url_is_authorized(
     api_client,
     buyer,
+    other_user,
     admin_user,
     inspector_user,
     inspection_payload,
@@ -261,10 +301,14 @@ def test_inspector_report_evidence_signed_url_is_authorized(
     api_client.force_authenticate(buyer)
     signed = api_client.get(reverse("inspection-evidence-signed-url", args=[evidence_id]))
 
+    api_client.force_authenticate(other_user)
+    unrelated = api_client.get(reverse("inspection-evidence-signed-url", args=[evidence_id]))
+
     assert report.status == InspectionReportStatus.DRAFT
     assert evidence_response.status_code == 201
     assert signed.status_code == 200
     assert signed.data["url"]
+    assert unrelated.status_code == 404
 
 
 def test_requester_can_fetch_approved_report_by_inspection_request(

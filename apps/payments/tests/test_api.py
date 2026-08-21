@@ -279,10 +279,14 @@ def test_unrelated_user_cannot_get_payment_proof_signed_url(
         file=valid_proof_file,
         amount_claimed=Decimal("500000.00"),
     )
+    authenticate(api_client, buyer)
+    authorized = api_client.get(f"/api/v1/payment-proofs/{proof.id}/signed-url/")
     authenticate(api_client, other_user)
 
     response = api_client.get(f"/api/v1/payment-proofs/{proof.id}/signed-url/")
 
+    assert authorized.status_code == 200
+    assert authorized.data["url"]
     assert response.status_code == 404
 
 

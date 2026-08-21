@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.accounts.services import user_is_admin
 from apps.inspections.choices import (
+    INSPECTION_ASSIGNMENT_ACCESS_STATUSES,
     AssignmentStatus,
     InspectionReportStatus,
     InspectionRequestStatus,
@@ -433,7 +434,10 @@ class InspectionAssignmentViewSet(
         )
         if user_is_admin(self.request.user):
             return queryset
-        return queryset.filter(inspector=self.request.user)
+        return queryset.filter(
+            inspector=self.request.user,
+            status__in=INSPECTION_ASSIGNMENT_ACCESS_STATUSES,
+        )
 
     @action(detail=True, methods=["post"])
     def accept(self, request, pk=None):

@@ -473,6 +473,7 @@ def test_construction_evidence_signed_url_is_authorized(
     project,
     project_manager,
     investor,
+    stranger,
 ):
     ProjectStakeholder.objects.create(
         project=project,
@@ -495,8 +496,14 @@ def test_construction_evidence_signed_url_is_authorized(
         reverse("construction-project-evidence-signed-url", args=[project.slug, created.data["id"]])
     )
 
+    api_client.force_authenticate(stranger)
+    unrelated = api_client.get(
+        reverse("construction-project-evidence-signed-url", args=[project.slug, created.data["id"]])
+    )
+
     assert signed.status_code == 200
     assert signed.data["url"]
+    assert unrelated.status_code in {403, 404}
 
 
 def test_milestone_can_request_existing_inspection_flow(

@@ -6,6 +6,7 @@ from apps.accounts.choices import RoleName
 from apps.accounts.models import User
 from apps.accounts.services import create_audit_log, user_has_role, user_is_admin
 from apps.inspections.choices import (
+    INSPECTION_ASSIGNMENT_ACCESS_STATUSES,
     EvidenceVisibility,
     InspectorVerificationStatus,
     WalkthroughStatus,
@@ -81,9 +82,10 @@ def user_can_view_inspection(user: User, inspection: InspectionRequest) -> bool:
         return True
     if inspection.requester_id == user.id or inspection.property.owner_id == user.id:
         return True
-    if inspection.assigned_inspector_id == user.id:
-        return True
-    return inspection.assignments.filter(inspector=user).exists()
+    return inspection.assignments.filter(
+        inspector=user,
+        status__in=INSPECTION_ASSIGNMENT_ACCESS_STATUSES,
+    ).exists()
 
 
 def user_can_view_evidence(user: User, evidence) -> bool:
@@ -111,7 +113,12 @@ def inspection_queryset_for_user(user: User):
     if user_is_admin(user):
         return queryset
     return queryset.filter(
-        Q(requester=user) | Q(property__owner=user) | Q(assigned_inspector=user)
+        Q(requester=user)
+        | Q(property__owner=user)
+        | Q(
+            assignments__inspector=user,
+            assignments__status__in=INSPECTION_ASSIGNMENT_ACCESS_STATUSES,
+        )
     ).distinct()
 
 
