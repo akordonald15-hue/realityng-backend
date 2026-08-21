@@ -18,19 +18,24 @@
 | `SESSION_COOKIE_SECURE` | `false` | Sends session cookies over HTTPS only when enabled. Keep `false` for HTTP-only development environments. |
 | `CSRF_COOKIE_SECURE` | `false` | Sends CSRF cookies over HTTPS only when enabled. Keep `false` for HTTP-only development environments. |
 | `DATABASE_URL` | `postgres://realityng:realityng@postgres:5432/realityng` | PostgreSQL connection string. |
+| `POSTGRES_HOST_PORT` | `55432` | Loopback-only host port published by Docker Compose. Container networking remains on port 5432. |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis cache URL. |
+| `REDIS_HOST_PORT` | `56379` | Loopback-only host port published by Docker Compose. Container networking remains on port 6379. |
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery broker URL. |
 | `CELERY_RESULT_BACKEND` | `redis://redis:6379/0` | Celery result backend URL. |
 | `CHANNEL_LAYER_REDIS_URL` | `redis://redis:6379/0` | Redis URL used by Django Channels for realtime WebSocket fan-out. Defaults to `REDIS_URL`. |
 | `CHANNEL_LAYER_PREFIX` | `realityng` | Redis key prefix for the Django Channels layer. |
 | `NOTIFICATION_EMAIL_TASKS_ENABLED` | `false` locally | Enables Celery-backed transactional notification email queueing. Keep disabled until email workers and provider credentials are configured. |
 | `MINIO_ENDPOINT` | `http://minio:9000` | S3-compatible local object storage endpoint. |
-| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` | Browser-accessible object storage endpoint used when generating media URLs. |
+| `MINIO_PUBLIC_ENDPOINT` | `http://localhost:59000` | Browser-accessible object storage endpoint used when generating media URLs. Keep it aligned with `MINIO_API_HOST_PORT`. |
 | `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key. |
 | `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key. |
 | `MINIO_BUCKET_NAME` | `realityng-local` | Local object storage bucket name. |
+| `MINIO_API_HOST_PORT` | `59000` | Loopback-only host port for the MinIO S3 API. |
+| `MINIO_CONSOLE_HOST_PORT` | `59001` | Loopback-only host port for the MinIO console. |
 | `VERIFICATION_DOCUMENT_BUCKET_NAME` | `realityng-verification-private` | Private bucket for sensitive verification evidence. Do not make this bucket public. |
 | `USE_S3_MEDIA_STORAGE` | `true` | Enables S3-compatible media storage. Docker local development sets this to `true`; direct local tests can leave it `false`. |
+| `BACKEND_HOST_PORT` | `58000` | Loopback-only host port for the backend API. Container networking remains on port 8000. |
 
 ## Optional Variables
 
@@ -61,12 +66,12 @@
 | `CONSTRUCTION_ALLOWED_VIDEO_TYPES` | `video/mp4,video/webm` | Allowed construction video MIME types. |
 | `CONSTRUCTION_ALLOWED_DOCUMENT_TYPES` | `application/pdf` | Allowed construction document MIME types. |
 | `CONSTRUCTION_ALLOWED_EXTENSIONS` | `.jpg,.jpeg,.png,.webp,.mp4,.webm,.pdf` | Allowed construction evidence file extensions. |
-| `FINANCING_DOCUMENT_BUCKET_NAME` | `realityng-financing-private` | Private bucket for financing application documents. Do not make this bucket public. |
+| `FINANCING_DOCUMENT_BUCKET_NAME` | `realityng-financing-documents-private` | Private bucket for financing application documents. Do not make this bucket public. |
 | `FINANCING_DOCUMENT_SIGNED_URL_EXPIRY` | `300` | Signed URL lifetime for private financing documents. |
 | `FINANCING_DOCUMENT_MAX_SIZE_MB` | `10` | Maximum financing document upload size in megabytes. |
 | `FINANCING_DOCUMENT_ALLOWED_TYPES` | `application/pdf,image/jpeg,image/png` | Comma-separated allowed financing document MIME types. |
 | `FINANCING_DOCUMENT_ALLOWED_EXTENSIONS` | `.pdf,.jpg,.jpeg,.png` | Comma-separated allowed financing document extensions. |
-| `FINANCING_CONSENT_TERMS_VERSION` | `financing-v1` | Consent terms version recorded when applicants grant partner-sharing consent. |
+| `FINANCING_CONSENT_TERMS_VERSION` | `2026-08` | Consent terms version recorded when applicants grant partner-sharing consent. |
 | `INSPECTION_EVIDENCE_BUCKET` | `realityng-inspection-evidence` | Private bucket for inspection evidence. |
 | `INSPECTION_REPORT_BUCKET` | `realityng-inspection-reports` | Private bucket for inspection report documents. |
 | `INSPECTION_SIGNED_URL_EXPIRY_SECONDS` | `300` | Signed inspection report/evidence URL lifetime in seconds. |
