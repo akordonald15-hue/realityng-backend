@@ -20,5 +20,7 @@ Status: initial launch register
 | Stale listings | Medium | High | Poor customer experience | Listing statuses exist | Stale-listing operations and content audit | Product/Ops | No unless severe | Production content audit |
 | Partner outage | Medium | Medium | Financing/escrow delay | Manual/partner abstraction | Escalation runbook | Ops/Partner Manager | No if disclosed | Runbook review |
 | Browser/mobile regression | Medium | Medium | Poor adoption | Responsive UI and tests | Sprint 15/19 browser QA matrix | Frontend/Product | No unless core journey broken | Device testing |
+| Inactive inspection assignment retains private request access | High | Low | Former inspector sees private inspection data | Sprint 15 explicit access-bearing assignment statuses and regression tests | Keep status matrix in regression suite | Engineering/Security | Closed | Declined/cancelled/reassigned API tests |
+| Malware uploaded in an otherwise allowed file type | Medium | Medium | Harmful document retained in private storage | Extension, MIME, size and content-signature validation | Add quarantine/scanning before risk appetite requires it | Engineering/Security | No for controlled beta if downloads remain private and disclosed | Upload security review and future scanner test |
+| Visual browser/device QA unavailable during Sprint 15 run | Medium | Medium | Responsive defect reaches beta | Frontend automated tests and HTTP route smoke | Execute desktop/tablet/mobile matrix with connected browser | Frontend/Product | No unless a core journey fails | Browser QA report |
 | OpenAPI enum warnings | Low | High | Client-generation friction | Warnings documented | Cleanup before generated client adoption | Engineering | No | Schema validation |
-
