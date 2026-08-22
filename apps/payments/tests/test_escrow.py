@@ -42,7 +42,7 @@ def escrow_provider(db):
     return EscrowProvider.objects.create(
         name="Manual Escrow Partner",
         slug="manual-escrow",
-        status=EscrowProviderStatus.ACTIVE,
+        status=EscrowProviderStatus.SANDBOX,
         integration_mode="manual",
         supports_partial_funding=True,
         supports_partial_release=True,
@@ -76,6 +76,19 @@ def test_create_escrow_attaches_to_existing_transaction(transaction, escrow_prov
     assert escrow.status == EscrowStatus.AWAITING_FUNDING
     assert escrow.expected_platform_fee == Decimal("1000000.00")
     assert escrow.confirmed_funded_amount == Decimal("0.00")
+
+
+def test_live_escrow_provider_is_blocked_without_approval(transaction, escrow_provider, buyer):
+    escrow_provider.status = EscrowProviderStatus.ACTIVE
+    escrow_provider.save(update_fields=["status", "updated_at"])
+
+    with pytest.raises(ValidationError, match="Live escrow activation is disabled"):
+        services.create_escrow_transaction(
+            transaction=transaction,
+            provider=escrow_provider,
+            actor=buyer,
+            expected_amount=Decimal("1000000.00"),
+        )
 
 
 def test_duplicate_escrow_creation_returns_existing(transaction, escrow_provider, buyer):

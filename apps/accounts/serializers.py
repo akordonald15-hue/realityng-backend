@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib.auth import authenticate, password_validation
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.encoding import force_str
@@ -14,7 +16,7 @@ from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.choices import ADMIN_ONLY_ROLES, RoleName, UserRoleStatus
-from apps.accounts.models import Role, User, UserProfile, UserRole
+from apps.accounts.models import Role, User, UserConsent, UserProfile, UserRole
 from apps.accounts.services import create_user_with_profile, request_role
 
 
@@ -154,6 +156,23 @@ class RegisterSerializer(serializers.Serializer):
         allow_null=True,
         max_length=32,
     )
+    accepts_terms = serializers.BooleanField(write_only=True)
+    accepts_privacy = serializers.BooleanField(write_only=True)
+    terms_version = serializers.CharField(write_only=True)
+    privacy_version = serializers.CharField(write_only=True)
+
+    def validate(self, attrs: dict) -> dict:
+        if not attrs["accepts_terms"]:
+            raise serializers.ValidationError({"accepts_terms": "Terms acceptance is required."})
+        if not attrs["accepts_privacy"]:
+            raise serializers.ValidationError(
+                {"accepts_privacy": "Privacy notice acknowledgement is required."}
+            )
+        if attrs["terms_version"] != settings.PLATFORM_TERMS_VERSION:
+            raise serializers.ValidationError({"terms_version": "Unsupported terms version."})
+        if attrs["privacy_version"] != settings.PRIVACY_NOTICE_VERSION:
+            raise serializers.ValidationError({"privacy_version": "Unsupported privacy version."})
+        return attrs
 
     def validate_email(self, value: str) -> str:
         email = User.objects.normalize_email(value).lower()
@@ -173,7 +192,30 @@ class RegisterSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data: dict) -> User:
-        return create_user_with_profile(**validated_data)
+        consent_versions = {
+            "terms": validated_data.pop("terms_version"),
+            "privacy": validated_data.pop("privacy_version"),
+        }
+        validated_data.pop("accepts_terms")
+        validated_data.pop("accepts_privacy")
+        request = self.context.get("request")
+        ip_address = request.META.get("REMOTE_ADDR") if request else None
+        user_agent = request.META.get("HTTP_USER_AGENT", "")[:255] if request else ""
+        with transaction.atomic():
+            user = create_user_with_profile(**validated_data)
+            UserConsent.objects.bulk_create(
+                [
+                    UserConsent(
+                        user=user,
+                        consent_type=consent_type,
+                        document_version=version,
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                    )
+                    for consent_type, version in consent_versions.items()
+                ]
+            )
+        return user
 
 
 class LoginSerializer(serializers.Serializer):

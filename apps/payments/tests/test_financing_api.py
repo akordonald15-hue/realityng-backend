@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.payments.choices import FinancingApplicationStatus, FinancingConsentStatus
@@ -311,6 +312,7 @@ def test_invalid_financing_document_content_is_rejected(
     assert response.status_code == 400
 
 
+@override_settings(FINANCING_LIVE_ACTIVATION_ENABLED=True)
 def test_admin_partner_handoff_offer_and_applicant_acceptance(
     api_client,
     buyer,
@@ -356,6 +358,7 @@ def test_admin_partner_handoff_offer_and_applicant_acceptance(
     assert application.status == FinancingApplicationStatus.OFFER_ACCEPTED
 
 
+@override_settings(FINANCING_LIVE_ACTIVATION_ENABLED=True)
 def test_applicant_cannot_modify_partner_offer_or_admin_decision(
     api_client,
     buyer,

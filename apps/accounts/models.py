@@ -141,3 +141,34 @@ class AuditLog(UUIDPrimaryKeyMixin):
 
     def __str__(self) -> str:
         return f"{self.action} {self.entity_type}:{self.entity_id}"
+
+
+class UserConsent(UUIDPrimaryKeyMixin):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="consents",
+    )
+    consent_type = models.CharField(max_length=64)
+    document_version = models.CharField(max_length=64)
+    granted_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-granted_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "consent_type", "document_version"],
+                condition=Q(revoked_at__isnull=True),
+                name="unique_active_user_consent_version",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "consent_type", "granted_at"]),
+            models.Index(fields=["consent_type", "document_version"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}:{self.consent_type}@{self.document_version}"

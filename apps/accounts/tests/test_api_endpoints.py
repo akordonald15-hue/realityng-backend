@@ -16,6 +16,10 @@ def test_auth_and_profile_endpoint_flow(api_client):
             "email": "flow@example.com",
             "password": "Str0ngPass123!",
             "first_name": "Flow",
+            "accepts_terms": True,
+            "accepts_privacy": True,
+            "terms_version": "2026-08",
+            "privacy_version": "2026-08",
         },
         format="json",
     )

@@ -16,6 +16,10 @@ def test_register_creates_user_profile(api_client):
             "first_name": "New",
             "last_name": "User",
             "phone_number": "+2348010000000",
+            "accepts_terms": True,
+            "accepts_privacy": True,
+            "terms_version": "2026-08",
+            "privacy_version": "2026-08",
         },
         format="json",
     )
@@ -30,10 +34,27 @@ def test_register_creates_user_profile(api_client):
 def test_register_rejects_duplicate_email(api_client, user):
     response = api_client.post(
         reverse("auth-register"),
-        {"email": user.email, "password": "Str0ngPass123!"},
+        {
+            "email": user.email,
+            "password": "Str0ngPass123!",
+            "accepts_terms": True,
+            "accepts_privacy": True,
+            "terms_version": "2026-08",
+            "privacy_version": "2026-08",
+        },
         format="json",
     )
 
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_register_requires_versioned_terms_and_privacy_acceptance(api_client):
+    response = api_client.post(
+        reverse("auth-register"),
+        {"email": "no-consent@example.com", "password": "Str0ngPass123!"},
+        format="json",
+    )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 

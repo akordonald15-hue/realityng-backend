@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
 from django.utils import timezone
@@ -349,6 +350,13 @@ def create_escrow_transaction(
         )
     if provider.status not in {EscrowProviderStatus.ACTIVE, EscrowProviderStatus.SANDBOX}:
         raise ValidationError("Escrow provider is not active.")
+    if (
+        provider.status == EscrowProviderStatus.ACTIVE
+        and not settings.ESCROW_LIVE_ACTIVATION_ENABLED
+    ):
+        raise ValidationError(
+            "Live escrow activation is disabled pending documented professional approval."
+        )
     currency = (currency or locked_transaction.currency).upper()
     if len(currency) != 3 or not currency.isalpha():
         raise ValidationError("Currency must be a 3-letter ISO code.")
@@ -1300,6 +1308,10 @@ def submit_financing_to_partner(
     payload_hash: str = "",
     message: str = "",
 ) -> FinancingPartnerSubmission:
+    if not settings.FINANCING_LIVE_ACTIVATION_ENABLED:
+        raise ValidationError(
+            "Financing partner activation is disabled pending documented professional approval."
+        )
     application = FinancingApplication.objects.select_for_update().get(id=application.id)
     if not can_admin_financing(actor):
         raise ValidationError("Only admins can submit financing applications to partners.")

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from apps.accounts.models import AuditLog, Role, User, UserProfile, UserRole
+from apps.accounts.models import AuditLog, Role, User, UserConsent, UserProfile, UserRole
 
 
 @admin.register(User)
@@ -57,6 +57,22 @@ class UserRoleAdmin(admin.ModelAdmin):
 class UserProfileAdmin(admin.ModelAdmin):
     list_display = ["user", "country", "state", "city", "updated_at"]
     search_fields = ["user__email", "country", "state", "city"]
+
+
+@admin.register(UserConsent)
+class UserConsentAdmin(admin.ModelAdmin):
+    list_display = ["user", "consent_type", "document_version", "granted_at", "revoked_at"]
+    list_filter = ["consent_type", "document_version"]
+    search_fields = ["user__email"]
+    readonly_fields = [
+        "user",
+        "consent_type",
+        "document_version",
+        "granted_at",
+        "revoked_at",
+        "ip_address",
+        "user_agent",
+    ]
 
 
 @admin.register(AuditLog)
