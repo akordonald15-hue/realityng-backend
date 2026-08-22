@@ -18,8 +18,15 @@ Environment: isolated PostgreSQL 16 and Redis 7 on loopback-only ports
 | Frontend tests | PASS, 46 files and 91 tests |
 | Mock/real API builds | PASS |
 | Redis/Channels/Celery/Beat/ASGI | PASS |
+| Installed-Chrome Playwright gate | PASS, 18 passed and 32 intentionally skipped |
+| Browser viewports | PASS, 1440x900, 1366x768, 768x1024, 390x844, 360x800 |
+| Actual frontend WebSocket | PASS, 101, delivery, notification, reconnect and access denial |
 
 The v2.6.0 post-merge PostgreSQL timeout follow-up is closed. After Sprint 15
 changes, the full PostgreSQL suite passed with 369 tests and 262 warnings in
 593.18 seconds. The eight-test increase is three inactive-inspection assignment
-states, two private-storage invariants, and three WebSocket security cases.
+ states, two private-storage invariants, and three WebSocket security cases.
+
+The browser gate used the isolated stack and actual API authentication. Its
+outbox delivery ran Celery tasks eagerly while retaining the real Redis channel
+layer; it did not repeat or replace the already-passed worker/Beat audit.

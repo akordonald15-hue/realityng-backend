@@ -1,7 +1,8 @@
 # RealityNG Sprint 15 Launch Readiness Report
 
-Status: engineering security work complete; merge gate pending visual QA  
-Date: 2026-08-21
+Status: Sprint 15 engineering gates complete; ready for merge approval
+
+Date: 2026-08-22
 
 ## Completed
 
@@ -18,6 +19,10 @@ Date: 2026-08-21
 - Expanded signed-URL and WebSocket security regressions.
 - Passed the final full PostgreSQL regression: 369 tests, 0 failures, 262
   warnings in 593.18 seconds.
+- Passed the installed-Chrome Playwright gate: 18 real-browser cases across five
+  representative viewports, with 32 intentional non-desktop skips.
+- Proved authenticated WebSocket upgrade, bidirectional delivery, notification,
+  reconnect/deduplication and nonparticipant denial through the actual frontend.
 
 ## Environment
 
@@ -33,11 +38,10 @@ unchanged. Credentials are environment-driven with local-only defaults.
 | S15-INFRA-001 | Medium | Fixed | Compose host PostgreSQL collision |
 | S15-STORAGE-001 | High | Fixed | Financing bucket absent/mismatched across compose and settings |
 | S15-AUTH-001 | High | Fixed | Inactive inspection assignment retained private access |
-| S15-QA-001 | Medium | Open | Visual desktop/tablet/mobile QA blocked by unavailable browser session |
+| S15-QA-001 | Medium | Fixed | Installed-Chrome desktop/tablet/mobile and WebSocket QA completed |
 
 ## Remaining Launch Risks
 
-- Visual browser/responsive QA is not complete.
 - Malware scanning/quarantine is not implemented.
 - Backup restore and production rollback rehearsal remain later infrastructure/
   beta gates and must not run destructively on the shared VPS.
@@ -46,6 +50,6 @@ unchanged. Credentials are environment-driven with local-only defaults.
 
 ## Assessment
 
-Sprint 15 code and automated security gates are suitable for review. Merge is
-not recommended until S15-QA-001 is completed or explicitly accepted by
-leadership under the launch blocker policy.
+Sprint 15 code, security, regression and real-browser gates are suitable for
+merge approval. This does not waive the separate Sprint 16-20 legal,
+infrastructure, performance, content and controlled-beta launch gates.
