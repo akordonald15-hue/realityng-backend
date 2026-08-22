@@ -252,10 +252,14 @@ def test_unrelated_user_cannot_access_financing_document_signed_url(
         file_size=valid_financing_document_file.size,
         checksum="a" * 64,
     )
+    authenticate(api_client, buyer)
+    authorized = api_client.get(f"/api/v1/financing-documents/{document.id}/signed-url/")
     authenticate(api_client, other_user)
 
     response = api_client.get(f"/api/v1/financing-documents/{document.id}/signed-url/")
 
+    assert authorized.status_code == 200
+    assert authorized.data["url"]
     assert response.status_code == 404
 
 

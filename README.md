@@ -47,12 +47,18 @@ docker compose up --build
 
 Services:
 
-1. Backend API: http://localhost:8000
-2. Health endpoint: http://localhost:8000/api/v1/health/
-3. API docs: http://localhost:8000/api/docs/
-4. Django admin: http://localhost:8000/admin/
-5. MinIO API: http://localhost:9000
-6. MinIO console: http://localhost:9001
+1. Backend API: http://localhost:58000
+2. Health endpoint: http://localhost:58000/api/v1/health/
+3. API docs: http://localhost:58000/api/docs/
+4. Django admin: http://localhost:58000/admin/
+5. MinIO API: http://localhost:59000
+6. MinIO console: http://localhost:59001
+
+Host ports are loopback-only and configurable through `POSTGRES_HOST_PORT`,
+`REDIS_HOST_PORT`, `MINIO_API_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, and
+`BACKEND_HOST_PORT`. Container-to-container networking continues to use the
+standard service ports. This avoids colliding with an existing host PostgreSQL
+service without changing Docker-internal connection URLs.
 
 Default MinIO credentials:
 

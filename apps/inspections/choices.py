@@ -70,6 +70,13 @@ class AssignmentStatus(models.TextChoices):
     COMPLETED = "completed", "Completed"
 
 
+INSPECTION_ASSIGNMENT_ACCESS_STATUSES = [
+    AssignmentStatus.ASSIGNED,
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.COMPLETED,
+]
+
+
 class InspectorAvailabilityStatus(models.TextChoices):
     AVAILABLE = "available", "Available"
     LIMITED = "limited", "Limited"

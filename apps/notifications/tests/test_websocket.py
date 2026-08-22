@@ -126,6 +126,21 @@ async def test_thread_websocket_accepts_subprotocol_token(websocket_users, webso
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
+async def test_thread_websocket_denies_anonymous_connection(websocket_thread):
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL],
+    )
+
+    connected, _ = await communicator.connect()
+
+    assert connected is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 @override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE, WEBSOCKET_ALLOW_QUERY_TOKEN=False)
 async def test_thread_websocket_rejects_query_string_token(websocket_users, websocket_thread):
     owner, _, _ = websocket_users
@@ -205,6 +220,47 @@ async def test_thread_websocket_rate_limits_by_user(websocket_users, websocket_t
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
+async def test_thread_websocket_rejects_sender_spoofing_and_invalid_bodies(
+    websocket_users, websocket_thread
+):
+    owner, buyer, _ = websocket_users
+    token = await sync_to_async(_token_for)(buyer)
+    communicator = WebsocketCommunicator(
+        application,
+        f"/ws/messages/threads/{websocket_thread.id}/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{token}"],
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to(
+        {
+            "type": "message.send",
+            "body": "",
+            "sender": str(owner.id),
+            "client_message_id": "145c8f23-38bd-4dfe-a084-a7f610af9c08",
+        }
+    )
+    empty_error = await communicator.receive_json_from(timeout=2)
+    await communicator.send_json_to(
+        {
+            "type": "message.send",
+            "body": "x" * 5001,
+            "sender": str(owner.id),
+            "client_message_id": "4e1664ed-71ea-4922-904e-dcc80b40fab7",
+        }
+    )
+    oversized_error = await communicator.receive_json_from(timeout=2)
+
+    assert empty_error["code"] == "validation_error"
+    assert oversized_error["code"] == "validation_error"
+    assert await sync_to_async(Message.objects.filter(thread=websocket_thread).exists)() is False
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
 async def test_websocket_and_http_retry_share_client_message_id(
     websocket_users, websocket_thread
 ):
@@ -276,3 +332,40 @@ async def test_notification_websocket_delivers_user_notifications(websocket_user
     assert event["notification"]["title"] == "Realtime notice"
     assert event["unread_count"] == 1
     await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(CHANNEL_LAYERS=CHANNEL_LAYER_OVERRIDE)
+async def test_notification_websocket_is_isolated_per_authenticated_user(websocket_users):
+    owner, buyer, _ = websocket_users
+    owner_token = await sync_to_async(_token_for)(owner)
+    buyer_token = await sync_to_async(_token_for)(buyer)
+    owner_socket = WebsocketCommunicator(
+        application,
+        "/ws/notifications/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{owner_token}"],
+    )
+    buyer_socket = WebsocketCommunicator(
+        application,
+        "/ws/notifications/",
+        subprotocols=[WEBSOCKET_SUBPROTOCOL, f"access_token.{buyer_token}"],
+    )
+    assert (await owner_socket.connect())[0] is True
+    assert (await buyer_socket.connect())[0] is True
+
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send(
+        notification_group_name(owner.id),
+        {
+            "type": "notification.created",
+            "notification": {"id": "owner-only", "title": "Private notice"},
+            "unread_count": 1,
+        },
+    )
+
+    event = await owner_socket.receive_json_from(timeout=2)
+    assert event["notification"]["id"] == "owner-only"
+    assert await buyer_socket.receive_nothing(timeout=0.2) is True
+    await owner_socket.disconnect()
+    await buyer_socket.disconnect()
