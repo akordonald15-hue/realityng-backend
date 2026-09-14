@@ -5,7 +5,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from rest_framework import status
 
-from apps.properties.models import PropertyImage
+from apps.properties.choices import (
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+)
+from apps.properties.models import PropertyAssignment, PropertyImage
 
 
 @pytest.mark.django_db
@@ -61,6 +66,61 @@ def test_admin_can_manage_any_property_images(
     )
 
     assert response.status_code == status.HTTP_201_CREATED
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_listing_can_upload_property_images(
+    api_client,
+    settings,
+    tmp_path,
+    other_user,
+    property_listing,
+    test_image_file,
+):
+    settings.MEDIA_ROOT = tmp_path
+    PropertyAssignment.objects.create(
+        property=property_listing,
+        user=other_user,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_LISTING],
+        assigned_by=property_listing.owner,
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("properties-images", args=[property_listing.slug]),
+        {"image": test_image_file("agent.jpg")},
+        format="multipart",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+
+@pytest.mark.django_db
+def test_assignment_without_manage_listing_cannot_upload_property_images(
+    api_client,
+    other_user,
+    property_listing,
+    test_image_file,
+):
+    PropertyAssignment.objects.create(
+        property=property_listing,
+        user=other_user,
+        relationship_type=PropertyAssignmentType.AGENT,
+        status=PropertyAssignmentStatus.ACTIVE,
+        capabilities=[PropertyAssignmentCapability.MANAGE_LEADS],
+        assigned_by=property_listing.owner,
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("properties-images", args=[property_listing.slug]),
+        {"image": test_image_file("agent.jpg")},
+        format="multipart",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db

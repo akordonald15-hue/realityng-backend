@@ -5,8 +5,17 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import AuditLog
-from apps.properties.choices import InquiryStatus, InquiryType, ViewingStatus, ViewingType
-from apps.properties.models import Inquiry, Viewing
+from apps.properties.choices import (
+    InquiryStatus,
+    InquiryType,
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+    PropertyStatus,
+    ViewingStatus,
+    ViewingType,
+)
+from apps.properties.models import Inquiry, Property, PropertyAssignment, Viewing
 
 
 @pytest.fixture
@@ -34,6 +43,54 @@ def viewing(inquiry):
 
 def future_iso(days=5):
     return (timezone.now() + timedelta(days=days)).isoformat()
+
+
+def assign_viewing_manager(prop, agent, **overrides):
+    payload = {
+        "property": prop,
+        "user": agent,
+        "relationship_type": PropertyAssignmentType.AGENT,
+        "status": PropertyAssignmentStatus.ACTIVE,
+        "capabilities": [PropertyAssignmentCapability.MANAGE_VIEWINGS],
+        "assigned_by": prop.owner,
+    }
+    payload.update(overrides)
+    return PropertyAssignment.objects.create(**payload)
+
+
+def make_viewing_for_property(prop, requester, *, status=ViewingStatus.REQUESTED):
+    inquiry = Inquiry.objects.create(
+        property=prop,
+        interested_user=requester,
+        property_owner=prop.owner,
+        inquiry_type=InquiryType.PURCHASE,
+    )
+    return Viewing.objects.create(
+        inquiry=inquiry,
+        property=prop,
+        requester=requester,
+        property_owner=prop.owner,
+        viewing_type=ViewingType.PHYSICAL,
+        preferred_date=timezone.localdate() + timedelta(days=3),
+        preferred_time="14:00:00",
+        status=status,
+    )
+
+
+def make_property(owner, title="Delegated Viewing Property"):
+    return Property.objects.create(
+        owner=owner,
+        title=title,
+        description=f"{title} description.",
+        property_type="apartment",
+        listing_type="rent",
+        price="2500000.00",
+        country="Nigeria",
+        state="Lagos",
+        city="Lagos",
+        address="Viewing Street",
+        status=PropertyStatus.APPROVED,
+    )
 
 
 @pytest.mark.django_db
@@ -98,6 +155,178 @@ def test_owner_lists_received_viewings(api_client, viewing, user):
     assert response.status_code == 200
     assert response.data["count"] == 1
     assert response.data["results"][0]["id"] == str(viewing.id)
+    assert response.data["results"][0]["can_manage_viewing"] is True
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_viewings_can_list_and_retrieve_received_viewing(
+    api_client,
+    viewing,
+    user,
+    django_user_model,
+):
+    agent = django_user_model.objects.create_user(
+        email="viewing-agent@example.com",
+        password="Str0ngPass123!",
+    )
+    assign_viewing_manager(viewing.property, agent)
+    api_client.force_authenticate(agent)
+
+    list_response = api_client.get(reverse("viewings-received"))
+    detail_response = api_client.get(reverse("viewings-detail", kwargs={"pk": viewing.id}))
+
+    assert list_response.status_code == 200
+    assert {item["id"] for item in list_response.data["results"]} == {str(viewing.id)}
+    assert detail_response.status_code == 200
+    assert detail_response.data["can_manage_viewing"] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("assignment_status", "expires_in_days", "capabilities"),
+    [
+        (PropertyAssignmentStatus.ACTIVE, None, [PropertyAssignmentCapability.MANAGE_LEADS]),
+        (PropertyAssignmentStatus.REVOKED, None, [PropertyAssignmentCapability.MANAGE_VIEWINGS]),
+        (PropertyAssignmentStatus.SUSPENDED, None, [PropertyAssignmentCapability.MANAGE_VIEWINGS]),
+        (PropertyAssignmentStatus.ACTIVE, -1, [PropertyAssignmentCapability.MANAGE_VIEWINGS]),
+    ],
+)
+def test_agent_without_current_manage_viewings_assignment_cannot_access_received_viewing(
+    api_client,
+    viewing,
+    django_user_model,
+    assignment_status,
+    expires_in_days,
+    capabilities,
+):
+    agent = django_user_model.objects.create_user(
+        email=f"blocked-viewing-agent-{assignment_status}-{expires_in_days}@example.com",
+        password="Str0ngPass123!",
+    )
+    expires_at = None
+    if expires_in_days is not None:
+        expires_at = timezone.now() + timedelta(days=expires_in_days)
+    assign_viewing_manager(
+        viewing.property,
+        agent,
+        status=assignment_status,
+        expires_at=expires_at,
+        capabilities=capabilities,
+    )
+    api_client.force_authenticate(agent)
+
+    list_response = api_client.get(reverse("viewings-received"))
+    detail_response = api_client.get(reverse("viewings-detail", kwargs={"pk": viewing.id}))
+    confirm_response = api_client.post(
+        reverse("viewings-confirm", kwargs={"pk": viewing.id}),
+        {"confirmed_datetime": future_iso()},
+        format="json",
+    )
+
+    assert list_response.status_code == 200
+    assert list_response.data["count"] == 0
+    assert detail_response.status_code == 404
+    assert confirm_response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_viewings_cannot_cross_property_boundary(
+    api_client,
+    viewing,
+    other_user,
+    django_user_model,
+):
+    agent = django_user_model.objects.create_user(
+        email="cross-boundary-agent@example.com",
+        password="Str0ngPass123!",
+    )
+    other_owner = django_user_model.objects.create_user(
+        email="other-viewing-owner@example.com",
+        password="Str0ngPass123!",
+    )
+    other_property = make_property(other_owner, "Other Viewing Property")
+    other_viewing = make_viewing_for_property(other_property, other_user)
+    assign_viewing_manager(viewing.property, agent)
+    api_client.force_authenticate(agent)
+
+    response = api_client.get(reverse("viewings-detail", kwargs={"pk": other_viewing.id}))
+    action = api_client.post(
+        reverse("viewings-confirm", kwargs={"pk": other_viewing.id}),
+        {"confirmed_datetime": future_iso()},
+        format="json",
+    )
+
+    assert response.status_code == 404
+    assert action.status_code == 404
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_viewings_can_manage_lifecycle_and_notes(
+    api_client,
+    viewing,
+    django_user_model,
+):
+    agent = django_user_model.objects.create_user(
+        email="viewing-manager@example.com",
+        password="Str0ngPass123!",
+    )
+    assign_viewing_manager(viewing.property, agent)
+    api_client.force_authenticate(agent)
+
+    confirmed = api_client.post(
+        reverse("viewings-confirm", kwargs={"pk": viewing.id}),
+        {
+            "confirmed_datetime": future_iso(),
+            "meeting_location": "Estate reception",
+            "notes": "Shared access note.",
+        },
+        format="json",
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.data["status"] == ViewingStatus.CONFIRMED
+    assert confirmed.data["can_manage_viewing"] is True
+
+    notes = api_client.patch(
+        reverse("viewings-update-notes", kwargs={"pk": viewing.id}),
+        {"notes": "Updated shared participant note."},
+        format="json",
+    )
+    assert notes.status_code == 200
+    assert notes.data["notes"] == "Updated shared participant note."
+
+    completed = api_client.post(reverse("viewings-complete", kwargs={"pk": viewing.id}))
+    assert completed.status_code == 200
+    assert completed.data["status"] == ViewingStatus.COMPLETED
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_viewings_can_reschedule_and_cancel(
+    api_client,
+    viewing,
+    django_user_model,
+):
+    agent = django_user_model.objects.create_user(
+        email="viewing-rescheduler@example.com",
+        password="Str0ngPass123!",
+    )
+    assign_viewing_manager(viewing.property, agent)
+    api_client.force_authenticate(agent)
+
+    rescheduled = api_client.post(
+        reverse("viewings-reschedule", kwargs={"pk": viewing.id}),
+        {"confirmed_datetime": future_iso(6), "meeting_location": "Virtual link pending"},
+        format="json",
+    )
+    cancelled = api_client.post(
+        reverse("viewings-cancel", kwargs={"pk": viewing.id}),
+        {"notes": "Requester asked for a later slot."},
+        format="json",
+    )
+
+    assert rescheduled.status_code == 200
+    assert rescheduled.data["status"] == ViewingStatus.RESCHEDULED
+    assert cancelled.status_code == 200
+    assert cancelled.data["status"] == ViewingStatus.CANCELLED
 
 
 @pytest.mark.django_db

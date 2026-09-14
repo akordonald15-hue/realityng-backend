@@ -3,8 +3,16 @@ from django.urls import reverse
 from rest_framework import status
 
 from apps.accounts.models import AuditLog
-from apps.properties.choices import ListingType, LocationPrecision, PropertyStatus, PropertyType
-from apps.properties.models import Property
+from apps.properties.choices import (
+    ListingType,
+    LocationPrecision,
+    PropertyAssignmentCapability,
+    PropertyAssignmentStatus,
+    PropertyAssignmentType,
+    PropertyStatus,
+    PropertyType,
+)
+from apps.properties.models import Property, PropertyAssignment
 
 
 @pytest.mark.django_db
@@ -64,6 +72,294 @@ def test_admin_can_update_any_property(api_client, admin_user, property_listing)
 
 
 @pytest.mark.django_db
+def test_assigned_agent_with_manage_listing_can_retrieve_property_detail(
+    api_client,
+    other_user,
+    property_listing,
+):
+    assign_manageable_property(property_listing, other_user)
+    api_client.force_authenticate(other_user)
+
+    response = api_client.get(reverse("properties-detail", args=[property_listing.slug]))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["id"] == str(property_listing.id)
+    assert response.data["can_manage_listing"] is True
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_listing_can_update_property(
+    api_client,
+    other_user,
+    property_listing,
+):
+    property_listing.status = PropertyStatus.APPROVED
+    property_listing.save(update_fields=["status"])
+    assign_manageable_property(property_listing, other_user)
+    api_client.force_authenticate(other_user)
+
+    response = api_client.patch(
+        reverse("properties-detail", args=[property_listing.slug]),
+        {"price": "125000000.00"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    property_listing.refresh_from_db()
+    assert str(property_listing.price) == "125000000.00"
+    assert property_listing.status == PropertyStatus.DRAFT
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("assignment_status", "expires_in_days", "capabilities"),
+    [
+        (PropertyAssignmentStatus.ACTIVE, None, [PropertyAssignmentCapability.MANAGE_LEADS]),
+        (PropertyAssignmentStatus.REVOKED, None, [PropertyAssignmentCapability.MANAGE_LISTING]),
+        (PropertyAssignmentStatus.SUSPENDED, None, [PropertyAssignmentCapability.MANAGE_LISTING]),
+        (PropertyAssignmentStatus.ACTIVE, -1, [PropertyAssignmentCapability.MANAGE_LISTING]),
+    ],
+)
+def test_agent_without_current_manage_listing_assignment_cannot_update_property(
+    api_client,
+    other_user,
+    property_listing,
+    assignment_status,
+    expires_in_days,
+    capabilities,
+):
+    expires_at = None
+    if expires_in_days is not None:
+        from django.utils import timezone
+
+        expires_at = timezone.now() + timezone.timedelta(days=expires_in_days)
+    assign_manageable_property(
+        property_listing,
+        other_user,
+        status=assignment_status,
+        expires_at=expires_at,
+        capabilities=capabilities,
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.patch(
+        reverse("properties-detail", args=[property_listing.slug]),
+        {"price": "125000000.00"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_agent_manage_listing_assignment_does_not_allow_delete(
+    api_client,
+    other_user,
+    property_listing,
+):
+    assign_manageable_property(property_listing, other_user)
+    api_client.force_authenticate(other_user)
+
+    response = api_client.delete(reverse("properties-detail", args=[property_listing.slug]))
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert Property.objects.filter(id=property_listing.id).exists()
+
+
+def make_property(owner, title, status=PropertyStatus.DRAFT, **overrides):
+    payload = {
+        "owner": owner,
+        "title": title,
+        "description": f"{title} description.",
+        "property_type": PropertyType.APARTMENT,
+        "listing_type": ListingType.RENT,
+        "price": "2500000.00",
+        "currency": "NGN",
+        "country": "Nigeria",
+        "state": "Lagos",
+        "city": "Lagos",
+        "address": f"{title} address",
+        "bedrooms": 2,
+        "bathrooms": 2,
+        "floor_area": "100.00",
+        "status": status,
+    }
+    payload.update(overrides)
+    return Property.objects.create(**payload)
+
+
+def assign_manageable_property(prop, agent, **overrides):
+    payload = {
+        "property": prop,
+        "user": agent,
+        "relationship_type": PropertyAssignmentType.AGENT,
+        "status": PropertyAssignmentStatus.ACTIVE,
+        "capabilities": [PropertyAssignmentCapability.MANAGE_LISTING],
+        "assigned_by": prop.owner,
+    }
+    payload.update(overrides)
+    return PropertyAssignment.objects.create(**payload)
+
+
+@pytest.mark.django_db
+def test_mine_returns_landlord_owned_properties_by_status(api_client, user, other_user):
+    draft = make_property(user, "Owner Draft", PropertyStatus.DRAFT)
+    pending = make_property(user, "Owner Pending", PropertyStatus.PENDING_REVIEW)
+    approved = make_property(user, "Owner Approved", PropertyStatus.APPROVED)
+    rejected = make_property(user, "Owner Rejected", PropertyStatus.REJECTED)
+    make_property(other_user, "Other Owner Approved", PropertyStatus.APPROVED)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    returned_ids = {item["id"] for item in response.data["results"]}
+    assert returned_ids == {str(draft.id), str(pending.id), str(approved.id), str(rejected.id)}
+
+
+@pytest.mark.django_db
+def test_properties_list_remains_owner_only_for_assigned_agent(api_client, user, other_user):
+    assigned = make_property(other_user, "Assigned Managed Property", PropertyStatus.APPROVED)
+    assign_manageable_property(assigned, user)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-list"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 0
+
+
+@pytest.mark.django_db
+def test_mine_filters_status_search_and_ordering(api_client, user):
+    make_property(user, "Zeta Draft", PropertyStatus.DRAFT)
+    alpha = make_property(user, "Alpha Approved", PropertyStatus.APPROVED)
+    beta = make_property(user, "Beta Approved", PropertyStatus.APPROVED)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(
+        reverse("properties-mine"),
+        {"status": PropertyStatus.APPROVED, "search": "Approved", "ordering": "title"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert [item["id"] for item in response.data["results"]] == [str(alpha.id), str(beta.id)]
+
+
+@pytest.mark.django_db
+def test_mine_returns_agent_assigned_manageable_properties(api_client, user, other_user):
+    owned = make_property(user, "Agent Owned Draft", PropertyStatus.DRAFT)
+    assigned = make_property(other_user, "Assigned Managed Property", PropertyStatus.APPROVED)
+    unassigned = make_property(other_user, "Unassigned Property", PropertyStatus.APPROVED)
+    assign_manageable_property(assigned, user)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    returned_ids = {item["id"] for item in response.data["results"]}
+    assert returned_ids == {str(owned.id), str(assigned.id)}
+    assert str(unassigned.id) not in returned_ids
+
+
+@pytest.mark.django_db
+def test_mine_excludes_assignments_without_manage_listing(api_client, user, other_user):
+    prop = make_property(other_user, "Lead Only Assignment", PropertyStatus.APPROVED)
+    assign_manageable_property(
+        prop,
+        user,
+        capabilities=[PropertyAssignmentCapability.MANAGE_LEADS],
+    )
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "assignment_status",
+    [PropertyAssignmentStatus.REVOKED, PropertyAssignmentStatus.SUSPENDED],
+)
+def test_mine_excludes_inactive_assignments(api_client, user, other_user, assignment_status):
+    prop = make_property(other_user, "Inactive Assignment", PropertyStatus.APPROVED)
+    assign_manageable_property(prop, user, status=assignment_status)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 0
+
+
+@pytest.mark.django_db
+def test_mine_excludes_expired_assignments(api_client, user, other_user):
+    from django.utils import timezone
+
+    prop = make_property(other_user, "Expired Assignment", PropertyStatus.APPROVED)
+    assign_manageable_property(prop, user, expires_at=timezone.now() - timezone.timedelta(days=1))
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 0
+
+
+@pytest.mark.django_db
+def test_mine_deduplicates_owned_and_assigned_property(api_client, user):
+    prop = make_property(user, "Owned And Assigned", PropertyStatus.APPROVED)
+    assign_manageable_property(prop, user)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 1
+    assert response.data["results"][0]["id"] == str(prop.id)
+
+
+@pytest.mark.django_db
+def test_mine_does_not_expose_unrelated_properties_to_buyer(api_client, user, other_user):
+    make_property(other_user, "Another User Property", PropertyStatus.APPROVED)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 0
+
+
+@pytest.mark.django_db
+def test_mine_preserves_admin_visibility(api_client, admin_user, user, other_user):
+    first = make_property(user, "First Property", PropertyStatus.DRAFT)
+    second = make_property(other_user, "Second Property", PropertyStatus.APPROVED)
+    api_client.force_authenticate(admin_user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    returned_ids = {item["id"] for item in response.data["results"]}
+    assert {str(first.id), str(second.id)}.issubset(returned_ids)
+
+
+@pytest.mark.django_db
+def test_mine_uses_paginated_response(api_client, user):
+    for index in range(21):
+        make_property(user, f"Property {index:02d}", PropertyStatus.DRAFT)
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("properties-mine"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["count"] == 21
+    assert response.data["next"]
+    assert response.data["previous"] is None
+    assert len(response.data["results"]) == 20
+
+
+@pytest.mark.django_db
 def test_owner_can_submit_property_for_review(api_client, user, property_listing):
     property_listing.status = PropertyStatus.DRAFT
     property_listing.save(update_fields=["status"])
@@ -82,6 +378,54 @@ def test_owner_can_submit_property_for_review(api_client, user, property_listing
         action="property.submitted",
         entity_id=property_listing.id,
     ).exists()
+
+
+@pytest.mark.django_db
+def test_assigned_agent_with_manage_listing_can_submit_property_for_review(
+    api_client,
+    other_user,
+    property_listing,
+):
+    property_listing.status = PropertyStatus.DRAFT
+    property_listing.save(update_fields=["status"])
+    assign_manageable_property(property_listing, other_user)
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("properties-submit-for-review", args=[property_listing.slug]),
+        {},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    property_listing.refresh_from_db()
+    assert property_listing.status == PropertyStatus.PENDING_REVIEW
+
+
+@pytest.mark.django_db
+def test_agent_without_manage_listing_cannot_submit_property_for_review(
+    api_client,
+    other_user,
+    property_listing,
+):
+    property_listing.status = PropertyStatus.DRAFT
+    property_listing.save(update_fields=["status"])
+    assign_manageable_property(
+        property_listing,
+        other_user,
+        capabilities=[PropertyAssignmentCapability.MANAGE_LEADS],
+    )
+    api_client.force_authenticate(other_user)
+
+    response = api_client.post(
+        reverse("properties-submit-for-review", args=[property_listing.slug]),
+        {},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    property_listing.refresh_from_db()
+    assert property_listing.status == PropertyStatus.DRAFT
 
 
 @pytest.mark.django_db
