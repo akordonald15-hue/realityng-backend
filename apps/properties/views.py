@@ -17,6 +17,7 @@ from apps.accounts.permissions import IsAdmin
 from apps.accounts.services import create_audit_log, user_is_admin
 from apps.properties.choices import (
     InquiryStatus,
+    PropertyAssignmentCapability,
     PropertyStatus,
     RentalApplicationStatus,
     ViewingStatus,
@@ -30,7 +31,7 @@ from apps.properties.models import (
     RentalApplication,
     Viewing,
 )
-from apps.properties.permissions import IsOwnerOrAdmin
+from apps.properties.permissions import IsListingManagerOrOwnerOrAdmin
 from apps.properties.serializers import (
     DashboardActivityItemSerializer,
     DashboardSummarySerializer,
@@ -58,6 +59,8 @@ from apps.properties.services import (
     emit_inquiry_event,
     emit_property_assignment_event,
     emit_viewing_event,
+    property_ids_for_user_capability,
+    user_has_property_capability,
 )
 
 
@@ -74,7 +77,7 @@ class ActionScopedThrottleMixin:
 class PropertyViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
     queryset = Property.objects.none()
     serializer_class = PropertySerializer
-    permission_classes = [IsAuthenticated, IsOwnerOrAdmin]
+    permission_classes = [IsAuthenticated, IsListingManagerOrOwnerOrAdmin]
     throttle_scope_by_action = {"images": "property_upload"}
     lookup_field = "slug"
     search_fields = ["title"]
@@ -82,11 +85,52 @@ class PropertyViewSet(ActionScopedThrottleMixin, viewsets.ModelViewSet):
     ordering = ["-created_at"]
     filterset_fields = ["status", "property_type", "listing_type", "city"]
 
+    def _base_queryset(self):
+        return Property.objects.select_related("owner").prefetch_related("images")
+
     def get_queryset(self):
-        queryset = Property.objects.select_related("owner").prefetch_related("images")
+        queryset = self._base_queryset()
         if user_is_admin(self.request.user):
             return queryset
+        if getattr(self, "action", None) in {
+            "retrieve",
+            "partial_update",
+            "update",
+            "images",
+            "image_detail",
+            "set_cover_image",
+            "submit_for_review",
+        }:
+            manageable_ids = property_ids_for_user_capability(
+                self.request.user,
+                PropertyAssignmentCapability.MANAGE_LISTING,
+            )
+            return queryset.filter(
+                Q(owner=self.request.user) | Q(id__in=manageable_ids)
+            ).distinct()
         return queryset.filter(owner=self.request.user)
+
+    @extend_schema(responses={200: PropertySerializer(many=True)})
+    @action(detail=False, methods=["get"], url_path="mine")
+    def mine(self, request):
+        queryset = self._base_queryset()
+        if not user_is_admin(request.user):
+            manageable_ids = property_ids_for_user_capability(
+                request.user,
+                PropertyAssignmentCapability.MANAGE_LISTING,
+            )
+            queryset = queryset.filter(
+                Q(owner=request.user) | Q(id__in=manageable_ids)
+            ).distinct()
+
+        queryset = self.filter_queryset(queryset)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_destroy(self, instance: Property) -> None:
         create_audit_log(
@@ -580,9 +624,17 @@ class ViewingViewSet(
         )
         if user_is_admin(user):
             return queryset
+        manageable_property_ids = property_ids_for_user_capability(
+            user,
+            PropertyAssignmentCapability.MANAGE_VIEWINGS,
+        )
         if self.action == "received":
-            return queryset.filter(property_owner=user)
-        return queryset.filter(Q(requester=user) | Q(property_owner=user))
+            return queryset.filter(
+                Q(property_owner=user) | Q(property_id__in=manageable_property_ids)
+            ).distinct()
+        return queryset.filter(
+            Q(requester=user) | Q(property_owner=user) | Q(property_id__in=manageable_property_ids)
+        ).distinct()
 
     @extend_schema(request=ViewingSerializer, responses={201: ViewingSerializer})
     def create(self, request, *args, **kwargs):
@@ -776,12 +828,15 @@ class ViewingViewSet(
             inquiry.transition_to(InquiryStatus.VIEWING_SCHEDULED)
 
     def _can_manage_viewing(self, user, viewing: Viewing) -> bool:
-        return user_is_admin(user) or viewing.property_owner_id == user.id
+        return user_has_property_capability(
+            user,
+            viewing.property,
+            PropertyAssignmentCapability.MANAGE_VIEWINGS,
+        )
 
     def _is_viewing_participant(self, user, viewing: Viewing) -> bool:
         return (
-            user_is_admin(user)
-            or viewing.property_owner_id == user.id
+            self._can_manage_viewing(user, viewing)
             or viewing.requester_id == user.id
         )
 
@@ -817,9 +872,17 @@ class RentalApplicationViewSet(
         )
         if user_is_admin(user):
             return queryset
+        manageable_property_ids = property_ids_for_user_capability(
+            user,
+            PropertyAssignmentCapability.MANAGE_APPLICATIONS,
+        )
         if self.action == "received":
-            return queryset.filter(property_owner=user)
-        return queryset.filter(Q(applicant=user) | Q(property_owner=user))
+            return queryset.filter(
+                Q(property_owner=user) | Q(property_id__in=manageable_property_ids)
+            ).distinct()
+        return queryset.filter(
+            Q(applicant=user) | Q(property_owner=user) | Q(property_id__in=manageable_property_ids)
+        ).distinct()
 
     @extend_schema(
         request=RentalApplicationSerializer,
@@ -985,7 +1048,15 @@ class RentalApplicationViewSet(
         )
 
     def _can_manage_application(self, user, application: RentalApplication) -> bool:
-        return user_is_admin(user) or application.property_owner_id == user.id
+        return (
+            user_is_admin(user)
+            or application.property_owner_id == user.id
+            or user_has_property_capability(
+                user,
+                application.property,
+                PropertyAssignmentCapability.MANAGE_APPLICATIONS,
+            )
+        )
 
     def _is_application_applicant(self, user, application: RentalApplication) -> bool:
         return application.applicant_id == user.id

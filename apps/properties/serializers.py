@@ -31,6 +31,7 @@ from apps.properties.models import (
     RentalApplication,
     Viewing,
 )
+from apps.properties.services import user_has_property_capability
 
 PROPERTY_MUTABLE_FIELDS = [
     "title",
@@ -227,6 +228,7 @@ class PropertySerializer(serializers.ModelSerializer):
     cover_image_url = serializers.SerializerMethodField()
     image_count = serializers.SerializerMethodField()
     image_gallery = serializers.SerializerMethodField()
+    can_manage_listing = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -264,6 +266,7 @@ class PropertySerializer(serializers.ModelSerializer):
             "cover_image_url",
             "image_count",
             "image_gallery",
+            "can_manage_listing",
             "created_at",
             "updated_at",
         ]
@@ -276,6 +279,7 @@ class PropertySerializer(serializers.ModelSerializer):
             "cover_image_url",
             "image_count",
             "image_gallery",
+            "can_manage_listing",
             "created_at",
             "updated_at",
         ]
@@ -295,6 +299,15 @@ class PropertySerializer(serializers.ModelSerializer):
             many=True,
             context=self.context,
         ).data
+
+    def get_can_manage_listing(self, obj: Property) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return user_has_property_capability(
+            user,
+            obj,
+            PropertyAssignmentCapability.MANAGE_LISTING,
+        )
 
     def validate_price(self, value):
         if value <= 0:
@@ -735,6 +748,7 @@ class ViewingSerializer(serializers.ModelSerializer):
     property = InquiryPropertySummarySerializer(read_only=True)
     requester = serializers.SerializerMethodField()
     property_owner = serializers.SerializerMethodField()
+    can_manage_viewing = serializers.SerializerMethodField()
 
     class Meta:
         model = Viewing
@@ -753,6 +767,7 @@ class ViewingSerializer(serializers.ModelSerializer):
             "meeting_link",
             "notes",
             "status",
+            "can_manage_viewing",
             "created_at",
             "updated_at",
         ]
@@ -766,6 +781,7 @@ class ViewingSerializer(serializers.ModelSerializer):
             "meeting_location",
             "meeting_link",
             "status",
+            "can_manage_viewing",
             "created_at",
             "updated_at",
         ]
@@ -775,6 +791,17 @@ class ViewingSerializer(serializers.ModelSerializer):
 
     def get_property_owner(self, obj: Viewing) -> dict:
         return InquiryUserSerializer(obj.property_owner).data
+
+    def get_can_manage_viewing(self, obj: Viewing) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return user_has_property_capability(
+            user,
+            obj.property,
+            PropertyAssignmentCapability.MANAGE_VIEWINGS,
+        )
 
     def validate_inquiry_id(self, value):
         try:
@@ -851,6 +878,7 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
     inquiry = serializers.UUIDField(source="inquiry.id", read_only=True)
     viewing = serializers.UUIDField(source="viewing.id", read_only=True)
     owner_notes = serializers.SerializerMethodField()
+    can_manage_application = serializers.SerializerMethodField()
 
     class Meta:
         model = RentalApplication
@@ -874,6 +902,7 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
             "message",
             "status",
             "owner_notes",
+            "can_manage_application",
             "created_at",
             "updated_at",
         ]
@@ -886,6 +915,7 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
             "viewing",
             "status",
             "owner_notes",
+            "can_manage_application",
             "created_at",
             "updated_at",
         ]
@@ -902,10 +932,25 @@ class RentalApplicationSerializer(serializers.ModelSerializer):
         if (
             user
             and user.is_authenticated
-            and (user.id == obj.property_owner_id or user_is_admin(user))
+            and self.get_can_manage_application(obj)
         ):
             return obj.owner_notes
         return ""
+
+    def get_can_manage_application(self, obj: RentalApplication) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return (
+            user_is_admin(user)
+            or user.id == obj.property_owner_id
+            or user_has_property_capability(
+                user,
+                obj.property,
+                PropertyAssignmentCapability.MANAGE_APPLICATIONS,
+            )
+        )
 
     def validate_property_id(self, value):
         try:
